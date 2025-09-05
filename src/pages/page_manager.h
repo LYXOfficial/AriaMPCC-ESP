@@ -25,6 +25,8 @@ public:
   // Configs
   void setInactivityTimeout(unsigned long ms) { inactivityTimeout = ms; }
   void setDeferredFullDelay(unsigned long ms) { deferredFullDelay = ms; }
+  void cancelPendingFull() { pendingFullRefreshPage = -1; }
+  int pendingPage() const { return pendingFullRefreshPage; }
 
 private:
   Page **pages = nullptr;

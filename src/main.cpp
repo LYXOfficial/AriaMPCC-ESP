@@ -674,7 +674,7 @@ void loop() {
           lastFullRefresh = 0;
           gPageMgr.requestRender(true);
           lastInteraction = now;
-          pendingFullRefreshPage = -1; // 避免紧随的延迟全刷
+          gPageMgr.cancelPendingFull(); // 避免紧随的延迟全刷
         }
       }
       lastButtonState = bs;
@@ -700,11 +700,12 @@ void loop() {
   // 局刷计数达到阈值，触发一次全刷
   if (pageSwitchCount >= partialBeforeFull) {
     // 统一交给 PageManager 执行当前页全刷
+    Serial.println("pageSwitchCount threshold reached, requesting full render for current page=" + String(gPageMgr.currentIndex()));
     gPageMgr.requestRender(true);
     pageSwitchCount = 0;
     lastFullRefresh = now;
   // 本次已经全刷，避免紧接着的延迟全刷再次触发
-  pendingFullRefreshPage = -1;
+  gPageMgr.cancelPendingFull();
   }
 
   // 定期检查时间变化（每秒检查一次，当分钟变化时更新显示）
@@ -713,6 +714,7 @@ void loop() {
     lastTimeCheck = now;
     if (currentPage == 0) { // 只在主页时检查时间更新
   // 触发主页的局部渲染；HomeTimePage 内部会自行判断是否需要全刷/局刷
+  Serial.println("Periodic time check -> request partial render for page=" + String(gPageMgr.currentIndex()));
   gPageMgr.requestRender(false);
     }
   }

@@ -15,7 +15,8 @@ void PageManager::begin() {
   ::lastInteraction = lastInteraction;
   if (pages && totalPages > 0) {
     // initial render full
-    pages[currentPage]->render(true);
+  Serial.println("PageManager begin: initial page=" + String(currentPage));
+  pages[currentPage]->render(true);
   }
 }
 
@@ -32,6 +33,7 @@ void PageManager::switchPage(int page) {
   ::lastInteraction = lastInteraction;
 
   // quick partial render for feedback
+  Serial.println("PageManager.switchPage -> partial render page=" + String(currentPage));
   pages[currentPage]->render(false);
   // mark deferred full
   pendingFullRefreshPage = currentPage;
@@ -71,8 +73,9 @@ void PageManager::loop() {
   if (pendingFullRefreshPage >= 0 && (now - lastPageSwitchMs) >= deferredFullDelay) {
     int pageToFull = pendingFullRefreshPage;
     pendingFullRefreshPage = -1;
-    if (pages && totalPages > 0) {
-      pages[currentPage]->render(true);
+    Serial.println("PageManager.loop: performing deferred full refresh for page=" + String(pageToFull));
+    if (pages && totalPages > 0 && pageToFull >=0 && pageToFull < totalPages) {
+      pages[pageToFull]->render(true);
     }
   }
   // inactivity auto-home: respect global lastInteraction updated by pages
