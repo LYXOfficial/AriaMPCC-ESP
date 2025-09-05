@@ -395,6 +395,8 @@ enum ButtonState { BTN_NONE = 0, BTN_RIGHT, BTN_LEFT, BTN_CENTER };
 extern int currentPage;
 // forward-declare page switching helper used by alarm handlers
 void switchPageAndFullRefresh(int page);
+// forward-declare placeholder partial renderer
+void renderPlaceholderPartial(int page);
 
 ButtonState readButtonState() {
   int v = analogRead(BTN_ADC_PIN);
@@ -911,7 +913,6 @@ void handleAlarmRightButton() {
     // 非行区，切页
     int next = (currentPage + 1) % totalPages;
     switchPageAndFullRefresh(next);
-    pageSwitchCount++;
     return;
   }
   // 在行区：如果未进入字段编辑，右键进入字段编辑并选择第一个字段（hour）
@@ -1273,44 +1274,36 @@ void renderCalendarPage(bool full = false) {
   if (full)
     refreshInProgress = false;
 }
-// Helper: 切换到某页并执行一次全刷
+// 延迟全刷控制：先局刷，0.5s 内无继续切页再全刷
+unsigned long lastPageSwitchMs = 0;
+int pendingFullRefreshPage = -1; // -1 表示无待全刷
+const unsigned long deferredFullDelay = 500; // ms
+
+// Helper: 切换到某页，立即局刷；0.5s 内若无再次切页，则执行一次全刷
 void switchPageAndFullRefresh(int page) {
   currentPage = page;
-  pageSwitchCount++;
   lastInteraction = millis();
-  // 强制全刷
-  lastDisplayedTime = "";
-  lastFullRefresh = 0;
-  // 如果是主页则调用 displayTime 触发全刷，否则使用全屏占位页绘制
-  if (currentPage == 0) {
-    displayTime();
-  } else {
-    // 如果是日历页则调用日历渲染函数，否则回退到通用占位显示
-    if (currentPage == 1) {
-      renderCalendarPage(true);
-    } else if (currentPage == 2) {
-      // 闹钟页全刷
-      // 进入闹钟页时默认不选中任何行（保持未选中状态）
-      alarmHighlightedRow = -1;
-      alarmFieldCursor = -1;
-      renderAlarmPage(true);
-    } else {
-      refreshInProgress = true;
-      display.setFullWindow();
-      display.firstPage();
-      do {
-        display.fillScreen(GxEPD_WHITE);
-        u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
-        String s = String("Page ") + String(currentPage);
-        int w = u8g2Fonts.getUTF8Width(s.c_str());
-        int cx = display.width() / 2;
-        int cy = display.height() / 2;
-        u8g2Fonts.setCursor(cx - w / 2, cy);
-        u8g2Fonts.print(s);
-      } while (display.nextPage());
-      refreshInProgress = false;
-    }
+
+  // 进入闹钟页时默认不选中任何行
+  if (currentPage == 2) {
+    alarmHighlightedRow = -1;
+    alarmFieldCursor = -1;
   }
+
+  // 先做一次局部渲染（快速反馈）
+  if (currentPage == 0) {
+    renderTimePartial();
+  } else if (currentPage == 1) {
+    renderCalendarPage(false);
+  } else if (currentPage == 2) {
+    renderAlarmPage(false);
+  } else {
+    renderPlaceholderPartial(currentPage);
+  }
+
+  // 标记延迟全刷
+  pendingFullRefreshPage = currentPage;
+  lastPageSwitchMs = millis();
 }
 void renderPlaceholderPartial(int page) {
   if (page == 1) {
@@ -1662,8 +1655,8 @@ void loop() {
           lastDisplayedTime = "";
           lastFullRefresh = 0;
           displayTime();
-          pageSwitchCount++;
           lastInteraction = now;
+          pendingFullRefreshPage = -1; // 避免紧随的延迟全刷
         }
       }
       lastButtonState = bs;
@@ -1703,6 +1696,41 @@ void loop() {
     }
     pageSwitchCount = 0;
     lastFullRefresh = now;
+  // 本次已经全刷，避免紧接着的延迟全刷再次触发
+  pendingFullRefreshPage = -1;
+  }
+
+  // 延迟全刷：若存在待全刷页面且超过延迟且页面未变化，则执行一次全刷
+  if (pendingFullRefreshPage >= 0 && (millis() - lastPageSwitchMs) >= deferredFullDelay) {
+    // 仅当当前页仍是待全刷页时执行
+    int pageToFull = pendingFullRefreshPage;
+    pendingFullRefreshPage = -1; // 清除挂起标记，避免重复全刷
+    // 强制一次全刷（走各页面的全刷渲染）
+    lastDisplayedTime = "";
+    lastFullRefresh = 0;
+    if (currentPage == 0) {
+      displayTime();
+    } else if (currentPage == 1) {
+      renderCalendarPage(true);
+    } else if (currentPage == 2) {
+      renderAlarmPage(true);
+    } else {
+      // 其他页面：全屏显示页码
+      refreshInProgress = true;
+      display.setFullWindow();
+      display.firstPage();
+      do {
+        display.fillScreen(GxEPD_WHITE);
+        u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
+        String s = String("Page ") + String(currentPage);
+        int w = u8g2Fonts.getUTF8Width(s.c_str());
+        int cx = display.width() / 2;
+        int cy = display.height() / 2;
+        u8g2Fonts.setCursor(cx - w / 2, cy);
+        u8g2Fonts.print(s);
+      } while (display.nextPage());
+      refreshInProgress = false;
+    }
   }
 
   // 定期检查时间变化（每秒检查一次，当分钟变化时更新显示）
