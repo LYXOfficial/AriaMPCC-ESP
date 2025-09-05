@@ -27,3 +27,7 @@ extern volatile bool refreshInProgress;
 
 // Page switching helper (defined in main.cpp)
 void switchPageAndFullRefresh(int page);
+
+// Interaction timing and partial-before-full counter (defined in main.cpp)
+extern unsigned long lastInteraction;
+extern int pageSwitchCount;

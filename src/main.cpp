@@ -1,6 +1,6 @@
 #include "Audio.h"
-#include "RightImage.h"
-#include "pinconf.h"
+#include "defines/RightImage.h"
+#include "defines/pinconf.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <GxEPD2_BW.h>
@@ -19,11 +19,13 @@ GxEPD2_BW<GxEPD2_213_B72, GxEPD2_213_B72::HEIGHT>
 Audio audio;
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 // TinyLunar removed: using internal lunar conversion helper
-#include "lunar.h"
+#include "utils/lunar.h"
 #include "app_context.h"
-#include "alarms.h"
-#include "calendar.h"
-#include "utils.h"
+#include "utils/utils.h"
+#include "pages/page_manager.h"
+#include "pages/hometime.h"
+#include "pages/calendar_page.h"
+#include "pages/alarms_page.h"
 
 // NTP 相关
 WiFiUDP ntpUDP;
@@ -38,14 +40,14 @@ String currentHitokoto = "";
 String lastDisplayedHitokoto = "";
 unsigned long lastFullRefresh = 0;
 unsigned long lastHitokotoUpdate = 0;
-const unsigned long fullRefreshInterval = 8 * 60 * 1000;    // 8分钟全刷一次
-const unsigned long hitokotoUpdateInterval = 5 * 60 * 1000; // 5分钟更新一次一言
+extern const unsigned long fullRefreshInterval = 8 * 60 * 1000;    // 8分钟全刷一次
+extern const unsigned long hitokotoUpdateInterval = 5 * 60 * 1000; // 5分钟更新一次一言
 // 天气相关
 String currentCity = "";
 String currentWeather = ""; // 描述
 String currentTemp = "";    // 摄氏度字符串
 unsigned long lastWeatherUpdate = 0;
-const unsigned long weatherUpdateInterval = 10 * 60 * 1000; // 10分钟
+extern const unsigned long weatherUpdateInterval = 10 * 60 * 1000; // 10分钟
 
 // 刷新进行中标志（在全刷期间屏蔽按键）
 volatile bool refreshInProgress = false;
@@ -81,45 +83,17 @@ String getHitokoto() {
   return hitokoto;
 }
 
-// 根据 IP 获取城市（使用 ip-api.com）
-String getCityByIP() {
-  HTTPClient http;
-  http.begin("http://my.ip.cn/json/");
-  int httpCode = http.GET();
-  String city = "";
-  if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    DynamicJsonDocument doc(1024);
-    auto err = deserializeJson(doc, payload);
-    if (!err) {
-      // my.ip.cn 返回结构中城市位于 data.city
-      if (doc.containsKey("data") && doc["data"].is<JsonObject>()) {
-        JsonObject d = doc["data"];
-        if (d.containsKey("city"))
-          city = String((const char *)d["city"]);
-      } else if (doc.containsKey("city")) {
-        city = String((const char *)doc["city"]);
-      }
-    }
-  }
-  http.end();
-  city.trim();
-  return city;
-}
+// 根据 IP 获取城市：使用 utils/getCityByIP()
 
 // main 不再实现闹钟页面，移至 alarms.cpp
 
-// 按钮状态枚举和读取函数（基于 BTN_ADC_PIN 的 ADC 值）
-enum ButtonState { BTN_NONE = 0, BTN_RIGHT, BTN_LEFT, BTN_CENTER };
+// 按钮状态读取（类型由 PageManager 定义）
 
-// forward-declare currentPage so displayTime() can check it
 extern int currentPage;
-// forward-declare page switching helper used by alarm handlers
 void switchPageAndFullRefresh(int page);
-// forward-declare placeholder partial renderer
 void renderPlaceholderPartial(int page);
 
-ButtonState readButtonState() {
+int readButtonStateRaw() {
   int v = analogRead(BTN_ADC_PIN);
   // 打印调试：可在需要时取消注释
   // Serial.printf("BTN ADC: %d\n", v);
@@ -182,21 +156,28 @@ void displayTime() {
 
   if (needFullRefresh) {
     refreshInProgress = true;
-    // 在全刷前检查并更新天气信息（按 IP 获取城市，然后获取该城市天气）
-    if (millis() - lastWeatherUpdate > weatherUpdateInterval ||
-        currentCity == "") {
-      String city = getCityByIP();
-      if (city.length() > 0)
-        currentCity = city;
+    // 在全刷前检查并更新天气信息：优先 Open-Meteo（按经纬度），失败再回退 wttr.in（按城市）
+    if (millis() - lastWeatherUpdate > weatherUpdateInterval || currentCity == "") {
+      double lat=0, lon=0; String cityEn;
+      bool locOk = getLocationByIP(lat, lon, cityEn);
       String w, t;
-      if (getWeatherForCity(currentCity, w, t)) {
-        currentWeather = w;
-        currentTemp = t;
-        lastWeatherUpdate = millis();
-        Serial.println("Weather updated: " + currentCity + " " + currentTemp +
-                       "C " + currentWeather);
+      bool ok = false;
+      if (locOk) {
+        ok = getWeatherByCoordsOpenMeteo(lat, lon, w, t);
+        // 同步城市名称用于 UI 展示（优先中文 my.ip.cn，其次 ip-api 返回的英文名）
+        String cityCN = getCityByIP();
+        if (cityCN.length() > 0) currentCity = cityCN; else if (cityEn.length() > 0) currentCity = cityEn;
+      }
+      if (!ok) {
+        String city = getCityByIP();
+        if (city.length() > 0) currentCity = city;
+        ok = getWeatherForCity(currentCity, w, t);
+      }
+      if (ok) {
+        currentWeather = w; currentTemp = t; lastWeatherUpdate = millis();
+        Serial.println("Weather updated: " + currentCity + " " + currentTemp + "C " + currentWeather);
       } else {
-        Serial.println("Weather fetch failed for city: " + currentCity);
+        Serial.println("Weather fetch failed (both Open-Meteo and wttr.in)");
       }
     }
     // 全刷新 - 显示时间、日期和底部一行一言（带分割线和省略号）
@@ -346,15 +327,15 @@ void displayTime() {
   }
 }
 
-// ---------- 页面翻页逻辑 ----------
-int currentPage = 0; // 0..5
-const int totalPages = 6;
-unsigned long lastPageSwitch = 0;
-int pageSwitchCount = 0;
-const int partialBeforeFull = 5; // 局刷次数达到后执行一次全刷（改为每8次，减少残影）
-unsigned long lastInteraction = 0;
-const unsigned long inactivityTimeout = 30 * 1000; // 30秒无操作回主页
-ButtonState lastButtonState = BTN_NONE;
+// ---------- 页面翻页逻辑（由 PageManager 接管） ----------
+int currentPage = 0;         // 暂时保留供模块访问
+const int totalPages = 6;    // 页面总数
+unsigned long lastInteraction = 0; // 供少量模块使用
+int pageSwitchCount = 0;     // 保留计数逻辑
+const int partialBeforeFull = 5;
+static PageManager gPageMgr;
+static Page *gPages[6] = {nullptr};
+static PageButton lastButtonState = BTN_NONE;
 
 // ----------------- Alarm 页面实现已迁移到 alarms.cpp -----------------
 
@@ -458,32 +439,12 @@ unsigned long lastPageSwitchMs = 0;
 int pendingFullRefreshPage = -1; // -1 表示无待全刷
 const unsigned long deferredFullDelay = 1000; // ms
 
-// Helper: 切换到某页，立即局刷；1s 内若无再次切页，则执行一次全刷
+// Helper: 切换页面委托给 PageManager
 void switchPageAndFullRefresh(int page) {
-  currentPage = page;
-  lastInteraction = millis();
-
-  // 先做一次局部渲染（快速反馈）
-  if (currentPage == 0) {
-    renderTimePartial();
-  } else if (currentPage == 1) {
-    renderCalendarPage(false);
-  } else if (currentPage == 2) {
-    renderAlarmPage(false);
-  } else {
-    renderPlaceholderPartial(currentPage);
-  }
-
-  // 标记延迟全刷
-  pendingFullRefreshPage = currentPage;
-  lastPageSwitchMs = millis();
+  gPageMgr.switchPage(page);
+  currentPage = gPageMgr.currentIndex();
 }
 void renderPlaceholderPartial(int page) {
-  if (page == 1) {
-    renderCalendarPage();
-    return;
-  }
-
   // 其他页面显示页码
   int px = 0, py = 0, pw = display.width(), ph = display.height();
   display.setPartialWindow(px, py, pw, ph);
@@ -574,19 +535,33 @@ void setup() {
   currentHitokoto = getHitokoto();
   lastHitokotoUpdate = millis();
 
-  // 初始化日历页面的选中日期为当前日期
-  time_t rawtime = timeClient.getEpochTime();
-  struct tm *timeinfo = localtime(&rawtime);
-  calendarSetSelectedDate(timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
-                          timeinfo->tm_mday);
+  // 日历页初始化由 CalendarPage 自行完成
 
-  // 加载闹钟配置
-  loadAlarms();
+  // 闹钟配置由 AlarmsPage 管理
 
-  // 首次启动时立即渲染主页（触发天气获取等）
-  displayTime();
+  // Page system setup
+  gPages[0] = new HomeTimePage([&](int p) { gPageMgr.switchPage(p); currentPage = gPageMgr.currentIndex(); });
+  // Use dedicated Page wrappers
+  gPages[1] = new CalendarPage();
+  gPages[2] = new AlarmsPage();
+  // Placeholder pages 3..5
+  class Placeholder : public Page {
+   public:
+    int index;
+    explicit Placeholder(int idx): index(idx) {}
+    void render(bool full) override { renderPlaceholderPartial(index); }
+    void onLeft() override { switchPageAndFullRefresh(index - 1); }
+    void onRight() override { switchPageAndFullRefresh(index + 1); }
+    void onCenter() override {}
+    const char *name() const override { return "placeholder"; }
+  };
+  gPages[3] = new Placeholder(3);
+  gPages[4] = new Placeholder(4);
+  gPages[5] = new Placeholder(5);
+  gPageMgr.setPages(gPages, 6);
+  gPageMgr.begin();
   lastInteraction = millis();
-  lastButtonState = readButtonState();
+  lastButtonState = (PageButton)readButtonStateRaw();
 
   delay(2000);
 
@@ -605,7 +580,7 @@ void loop() {
   unsigned long now = millis();
 
   // 读取按钮状态（拨杆）
-  ButtonState bs = readButtonState();
+  PageButton bs = (PageButton)readButtonStateRaw();
   // 如果当前处于全刷过程中，忽略按键输入
   if (refreshInProgress) {
     // 更新 lastButtonState 以避免边沿触发后续逻辑
@@ -625,38 +600,15 @@ void loop() {
       // 记录此次为有效按键时间
       lastButtonPress = now;
       // 状态变化视为一次交互（消抖、只在确认为方向/按下时触发）
-      if (bs == BTN_RIGHT) {
-        if (currentPage == 1) {
-          // 日历页面的右按钮处理
-          handleCalendarRightButton();
-        } else if (currentPage == 2) {
-          handleAlarmRightButton();
-        } else {
-          int next = (currentPage + 1) % totalPages;
-          switchPageAndFullRefresh(next);
-        }
-      } else if (bs == BTN_LEFT) {
-        if (currentPage == 1) {
-          // 日历页面的左按钮处理
-          handleCalendarLeftButton();
-        } else if (currentPage == 2) {
-          handleAlarmLeftButton();
-        } else {
-          int prev = (currentPage - 1 + totalPages) % totalPages;
-          switchPageAndFullRefresh(prev);
-        }
-      } else if (bs == BTN_CENTER) {
+      if (bs == BTN_RIGHT || bs == BTN_LEFT || bs == BTN_CENTER) {
+        gPageMgr.handleButtonEdge(bs);
+        currentPage = gPageMgr.currentIndex();
+  pageSwitchCount++; // 保留局刷计数逻辑
+      }
+      if (bs == BTN_CENTER) {
         Serial.println("BTN_CENTER pressed, currentPage=" +
                        String(currentPage));
-        if (currentPage == 1) {
-          // 日历页面的中按钮处理
-          handleCalendarCenterButton();
-        } else if (currentPage == 2) {
-          handleAlarmCenterButton();
-        } else if (currentPage != 0) {
-          Serial.println("Not on homepage, going to page 0");
-          switchPageAndFullRefresh(0);
-        } else {
+        if (currentPage == 0) {
           Serial.println("On homepage, starting manual refresh");
           // 在主页：局部显示获取信息中...（屏幕上方中央）
           {
@@ -695,27 +647,32 @@ void loop() {
           currentHitokoto = getHitokoto();
           lastHitokotoUpdate = millis();
           Serial.println("Fetching city and weather...");
-          String city = getCityByIP();
-          if (city.length() > 0)
-            currentCity = city;
-          String w, t;
-          if (getWeatherForCity(currentCity, w, t)) {
-            currentWeather = w;
-            currentTemp = t;
-            lastWeatherUpdate = millis();
-            Serial.println("Weather updated by manual fetch: " + currentCity +
-                           " " + currentTemp + "C " + currentWeather);
-          } else {
-            Serial.println("Manual weather fetch failed for city: " +
-                           currentCity);
+          {
+            double lat=0, lon=0; String cityEn; String w, t; bool ok=false;
+            bool locOk = getLocationByIP(lat, lon, cityEn);
+            if (locOk) {
+              ok = getWeatherByCoordsOpenMeteo(lat, lon, w, t);
+              String cityCN = getCityByIP();
+              if (cityCN.length() > 0) currentCity = cityCN; else if (cityEn.length() > 0) currentCity = cityEn;
+            }
+            if (!ok) {
+              String city = getCityByIP(); if (city.length() > 0) currentCity = city;
+              ok = getWeatherForCity(currentCity, w, t);
+            }
+            if (ok) {
+              currentWeather = w; currentTemp = t; lastWeatherUpdate = millis();
+              Serial.println("Weather updated by manual fetch: " + currentCity + " " + currentTemp + "C " + currentWeather);
+            } else {
+              Serial.println("Manual weather fetch failed (both Open-Meteo and wttr.in)");
+            }
           }
 
           // 完成后执行一次全刷来更新屏幕
-          // 强制 displayTime() 进行刷新（避免因时间/日期未变化而提前返回）
+          // 强制 HomeTimePage 进行刷新（避免因时间/日期未变化而提前返回）
           Serial.println("Forcing full refresh...");
           lastDisplayedTime = "";
           lastFullRefresh = 0;
-          displayTime();
+          gPageMgr.requestRender(true);
           lastInteraction = now;
           pendingFullRefreshPage = -1; // 避免紧随的延迟全刷
         }
@@ -724,74 +681,30 @@ void loop() {
     }
   }
 
-  // 如果超过无操作超时，返回主页
-  if (millis() - lastInteraction > inactivityTimeout && currentPage != 0) {
-    // 超时返回主页并做一次全刷
-    switchPageAndFullRefresh(0);
+  // 交由 PageManager 处理无操作超时与延迟全刷
+  gPageMgr.loop();
+
+  // Safety: 防止刷新标志被卡住导致无法切回主页
+  static unsigned long refreshStuckSince = 0;
+  if (refreshInProgress) {
+    if (refreshStuckSince == 0) refreshStuckSince = now;
+    else if (now - refreshStuckSince > 10000) { // 10s 超时，强制清除
+      Serial.println("Warning: refreshInProgress stuck >10s, clearing flag");
+      refreshInProgress = false;
+      refreshStuckSince = 0;
+    }
+  } else {
+    refreshStuckSince = 0;
   }
 
   // 局刷计数达到阈值，触发一次全刷
   if (pageSwitchCount >= partialBeforeFull) {
-    if (currentPage == 0) {
-      lastFullRefresh = 0; // 触发 displayTime 的全刷分支
-      displayTime();
-    } else if (currentPage == 1) {
-      // 如果在日历页，进行日历的全刷渲染
-      renderCalendarPage(true);
-    } else if (currentPage == 2) {
-      // 如果在闹钟页，进行闹钟页的全刷渲染
-      renderAlarmPage(true);
-    } else {
-      display.setFullWindow();
-      display.firstPage();
-      do {
-        display.fillScreen(GxEPD_WHITE);
-        u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
-        String s = String("Page ") + String(currentPage);
-        int w = u8g2Fonts.getUTF8Width(s.c_str());
-        int cx = display.width() / 2;
-        int cy = display.height() / 2;
-        u8g2Fonts.setCursor(cx - w / 2, cy);
-        u8g2Fonts.print(s);
-      } while (display.nextPage());
-    }
+    // 统一交给 PageManager 执行当前页全刷
+    gPageMgr.requestRender(true);
     pageSwitchCount = 0;
     lastFullRefresh = now;
   // 本次已经全刷，避免紧接着的延迟全刷再次触发
   pendingFullRefreshPage = -1;
-  }
-
-  // 延迟全刷：若存在待全刷页面且超过延迟且页面未变化，则执行一次全刷
-  if (pendingFullRefreshPage >= 0 && (millis() - lastPageSwitchMs) >= deferredFullDelay) {
-    // 仅当当前页仍是待全刷页时执行
-    int pageToFull = pendingFullRefreshPage;
-    pendingFullRefreshPage = -1; // 清除挂起标记，避免重复全刷
-    // 强制一次全刷（走各页面的全刷渲染）
-    lastDisplayedTime = "";
-    lastFullRefresh = 0;
-    if (currentPage == 0) {
-      displayTime();
-    } else if (currentPage == 1) {
-      renderCalendarPage(true);
-    } else if (currentPage == 2) {
-      renderAlarmPage(true);
-    } else {
-      // 其他页面：全屏显示页码
-      refreshInProgress = true;
-      display.setFullWindow();
-      display.firstPage();
-      do {
-        display.fillScreen(GxEPD_WHITE);
-        u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
-        String s = String("Page ") + String(currentPage);
-        int w = u8g2Fonts.getUTF8Width(s.c_str());
-        int cx = display.width() / 2;
-        int cy = display.height() / 2;
-        u8g2Fonts.setCursor(cx - w / 2, cy);
-        u8g2Fonts.print(s);
-      } while (display.nextPage());
-      refreshInProgress = false;
-    }
   }
 
   // 定期检查时间变化（每秒检查一次，当分钟变化时更新显示）
@@ -799,7 +712,8 @@ void loop() {
   if (now - lastTimeCheck > 1000) { // 每秒检查一次
     lastTimeCheck = now;
     if (currentPage == 0) { // 只在主页时检查时间更新
-      displayTime();        // 这个函数内部会判断是否需要更新
+  // 触发主页的局部渲染；HomeTimePage 内部会自行判断是否需要全刷/局刷
+  gPageMgr.requestRender(false);
     }
   }
 
