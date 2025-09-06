@@ -2,6 +2,8 @@
 #include "app_context.h"
 #include "utils/utils.h"
 #include "defines/RightImage.h"
+#include "pages/page_manager.h"
+extern PageManager gPageMgr;
 
 // Extern state from main.cpp (kept centralized)
 // Forward decl from main.cpp
@@ -22,14 +24,29 @@ extern String currentTemp;
 extern unsigned long lastWeatherUpdate;
 extern const unsigned long weatherUpdateInterval;
 extern volatile bool refreshInProgress;
+extern int currentPage;
 
 HomeTimePage::HomeTimePage(SwitchPageFn switcher) : switchPage(switcher) {}
 
 void HomeTimePage::render(bool full) {
-  // decide periodic full refresh
+  // decide periodic full refresh, but do NOT upgrade a partial request to full here.
   bool needFull = (lastDisplayedTime == "") || ((millis() - lastFullRefresh) > fullRefreshInterval);
-  if (!full && needFull) full = true;
-  if (full) renderFull(); else renderPartial();
+  // If this is a partial request but we just switched to the home page very recently,
+  // ensure we show a quick partial preview immediately (so user sees the page change)
+  unsigned long now = millis();
+  unsigned long windowMs = gPageMgr.getDeferredFullDelay();
+  bool justSwitchedToHome = (::currentPage == 0) && ((now - ::lastPageSwitchMs) < windowMs);
+  Serial.println("HomeTimePage::render page=" + String(::currentPage) + " requestedFull=" + String(full?1:0) + " needFull=" + String(needFull?1:0) + " justSwitchedToHome=" + String(justSwitchedToHome?1:0));
+  if (full) {
+    renderFull();
+  } else {
+    if (justSwitchedToHome) {
+      // ensure preview partial render shows immediately
+      renderPartial();
+    } else {
+      renderPartial();
+    }
+  }
 }
 
 void HomeTimePage::onLeft() {
@@ -41,10 +58,24 @@ void HomeTimePage::onRight() {
     switchPage(currentPage + 1);
 }
 void HomeTimePage::onCenter() {
-  // manual refresh: force full render by clearing last-displayed markers in main
-  lastDisplayedTime = "";
-  lastFullRefresh = 0;
-  render(true);
+  // manual refresh: show a small partial "刷新信息中..." overlay and let main
+  // perform network fetch and final full render to avoid immediate full refresh
+  const String msg = "刷新信息中...";
+  u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+  int textW = u8g2Fonts.getUTF8Width(msg.c_str());
+  const int padX = 8; const int padY = 6;
+  int pw = textW + padX * 2; int ph = 12 + padY * 2;
+  if (pw > display.width()) pw = display.width(); if (ph > display.height()) ph = display.height();
+  int px = (display.width() - pw) / 2; int py = 30;
+  display.setPartialWindow(px, py, pw, ph);
+  display.firstPage();
+  do {
+    display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+    display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+    int tx = px + (pw - textW) / 2; int ty = py + padY + 12;
+    u8g2Fonts.setCursor(tx, ty);
+    u8g2Fonts.print(msg);
+  } while (display.nextPage());
 }
 
 void HomeTimePage::renderFull() {

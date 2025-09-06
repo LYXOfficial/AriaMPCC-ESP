@@ -1,4 +1,6 @@
 #include "utils.h"
+#include "../defines/pinconf.h"
+#include "../pages/page_manager.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <U8g2_for_Adafruit_GFX.h>
@@ -43,6 +45,35 @@ String fitToWidthSingleLine(const String &sIn, int maxWidth) {
   String out = s.substring(0, lastPos);
   out += ell;
   return out;
+}
+
+// ---- Hitokoto (one-line quote) ----
+String getHitokoto() {
+  HTTPClient http;
+  http.begin("https://v1.hitokoto.cn/?encode=text&max_length=15");
+  int httpCode = http.GET();
+  String hitokoto = "";
+  if (httpCode == HTTP_CODE_OK) {
+    hitokoto = http.getString();
+    hitokoto.trim();
+  } else {
+    hitokoto = "QwQ";
+  }
+  http.end();
+  return hitokoto;
+}
+
+// ---- Button raw read / debounce globals ----
+unsigned long lastButtonPress = 0;
+const unsigned long debounceDelay = 100; // ms
+
+int readButtonStateRaw() {
+  int v = analogRead(BTN_ADC_PIN);
+  if (v > 4000) return BTN_NONE;
+  if (v >= 3000 && v <= 3300) return BTN_RIGHT;
+  if (v >= 2000 && v <= 2500) return BTN_LEFT;
+  if (v < 100) return BTN_CENTER;
+  return BTN_NONE;
 }
 
 bool getLocationByIP(double &outLat, double &outLon, String &outCityEn) {

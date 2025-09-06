@@ -70,11 +70,11 @@ void AlarmsPage::onLeft() {
 
 void AlarmsPage::onCenter() {
   if (highlightedRow < 0) {
-    int old = highlightedRow; highlightedRow = 0; fieldCursor = -1; if (old != highlightedRow && highlightedRow >= 0) pageSwitchCount++; render(false); lastInteraction = millis(); return;
+    int old = highlightedRow; highlightedRow = 0; fieldCursor = -1; if (old != highlightedRow && highlightedRow >= 0) { /* in-page selection, do not count as page switch */ } render(false); lastInteraction = millis(); return;
   }
   if (fieldCursor < 0) {
     int oldRow = highlightedRow; int nextRow = highlightedRow + 1; if (nextRow >= 5) { highlightedRow = -1; fieldCursor = -1; } else { highlightedRow = nextRow; fieldCursor = -1; }
-    if (oldRow != highlightedRow && highlightedRow >= 0) pageSwitchCount++; render(false); lastInteraction = millis(); return;
+    if (oldRow != highlightedRow && highlightedRow >= 0) { /* row navigation inside page; do not count */ } render(false); lastInteraction = millis(); return;
   }
   Alarm &a = s_alarms[highlightedRow];
   if (fieldCursor == ALARM_FIELD_HOUR) a.hour = (a.hour + 1) % 24;

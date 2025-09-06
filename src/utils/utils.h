@@ -14,3 +14,11 @@ bool getWeatherForCity(const String &city, String &outWeather, String &outTempC)
 
 // Open-Meteo: query by coordinates; returns Chinese description and temperature in Celsius (string)
 bool getWeatherByCoordsOpenMeteo(double lat, double lon, String &outWeather, String &outTempC);
+
+// Hitokoto (one-line quote)
+String getHitokoto();
+
+// Button/raw input helpers
+int readButtonStateRaw();
+extern unsigned long lastButtonPress;
+extern const unsigned long debounceDelay;

@@ -25,6 +25,7 @@ public:
   // Configs
   void setInactivityTimeout(unsigned long ms) { inactivityTimeout = ms; }
   void setDeferredFullDelay(unsigned long ms) { deferredFullDelay = ms; }
+  unsigned long getDeferredFullDelay() const { return deferredFullDelay; }
   void cancelPendingFull() { pendingFullRefreshPage = -1; }
   int pendingPage() const { return pendingFullRefreshPage; }
 
@@ -35,8 +36,8 @@ private:
   unsigned long lastInteraction = 0;
 
   // deferred full refresh
-  int pendingFullRefreshPage = -1;
-  unsigned long lastPageSwitchMs = 0;
+    int pendingFullRefreshPage = -1;
+    // unsigned long lastPageSwitchMs; // Keep as a private member only, remove initializer
   unsigned long deferredFullDelay = 500;
   unsigned long inactivityTimeout = 30 * 1000;
 };

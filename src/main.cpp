@@ -18,7 +18,6 @@ GxEPD2_BW<GxEPD2_213_B72, GxEPD2_213_B72::HEIGHT>
 
 Audio audio;
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
-// TinyLunar removed: using internal lunar conversion helper
 #include "utils/lunar.h"
 #include "app_context.h"
 #include "utils/utils.h"
@@ -59,29 +58,8 @@ const char *weekDaysChinese[] = {"周日", "周一", "周二", "周三",
 // main 不再保存日历实现/状态，移至 calendar.cpp
 
 // 防抖相关全局变量
-unsigned long lastButtonPress = 0;
-const unsigned long debounceDelay = 100; // ms
 
-// 获取一言
-String getHitokoto() {
-  HTTPClient http;
-  http.begin("https://v1.hitokoto.cn/?encode=text&max_length=15"); // 返回纯文本
 
-  int httpCode = http.GET();
-  String hitokoto = "";
-
-  if (httpCode == HTTP_CODE_OK) {
-    hitokoto = http.getString();
-    hitokoto.trim(); // 去除首尾空白字符
-    Serial.println("获取一言成功: " + hitokoto);
-  } else {
-    Serial.println("获取一言失败，HTTP Code: " + String(httpCode));
-    hitokoto = "QwQ"; // 默认文本
-  }
-
-  http.end();
-  return hitokoto;
-}
 
 // 根据 IP 获取城市：使用 utils/getCityByIP()
 
@@ -93,20 +71,7 @@ extern int currentPage;
 void switchPageAndFullRefresh(int page);
 void renderPlaceholderPartial(int page);
 
-int readButtonStateRaw() {
-  int v = analogRead(BTN_ADC_PIN);
-  // 打印调试：可在需要时取消注释
-  // Serial.printf("BTN ADC: %d\n", v);
-  if (v > 4000)
-    return BTN_NONE;
-  if (v >= 3000 && v <= 3300)
-    return BTN_RIGHT;
-  if (v >= 2000 && v <= 2500)
-    return BTN_LEFT;
-  if (v < 100)
-    return BTN_CENTER;
-  return BTN_NONE;
-}
+// button reading and debounce helpers are implemented in utils.cpp
 
 void displayTime() {
   // 仅在主页（page 0）时允许 displayTime 真正更新屏幕，
@@ -333,134 +298,16 @@ const int totalPages = 6;    // 页面总数
 unsigned long lastInteraction = 0; // 供少量模块使用
 int pageSwitchCount = 0;     // 保留计数逻辑
 const int partialBeforeFull = 5;
-static PageManager gPageMgr;
+PageManager gPageMgr;
 static Page *gPages[6] = {nullptr};
 static PageButton lastButtonState = BTN_NONE;
+// single global definition for lastPageSwitchMs
+unsigned long lastPageSwitchMs = 0;
 
 // ----------------- Alarm 页面实现已迁移到 alarms.cpp -----------------
 
-// 局部渲染：时间区域（复制 displayTime() 中的局部刷新绘制，但不做时间变更判断）
-void renderTimePartial() {
-  timeClient.update();
-  int hours = timeClient.getHours();
-  int minutes = timeClient.getMinutes();
-  String currentTime = String(hours < 10 ? "0" : "") + String(hours) + ":" +
-                       String(minutes < 10 ? "0" : "") + String(minutes);
-  time_t rawtime = timeClient.getEpochTime();
-  struct tm *timeinfo = localtime(&rawtime);
-  int year = timeinfo->tm_year + 1900;
-  int month = timeinfo->tm_mon + 1;
-  int day = timeinfo->tm_mday;
-  int weekday = timeinfo->tm_wday;
-  String currentDate = String(year) + "-" + String(month < 10 ? "0" : "") +
-                       String(month) + "-" + String(day < 10 ? "0" : "") +
-                       String(day) + " " + String(weekDaysChinese[weekday]);
-
-  // 一言（可能是旧的）
-  String oneLine = currentHitokoto;
-  oneLine.replace('\n', ' ');
-  oneLine.trim();
-
-  // 计算局部窗口（我们之前已经扩展到包含右侧图片）
-  int timeAreaX = 0;
-  int timeBaseline = display.height() / 2;
-  int iconTopEstimate = display.height() / 2 - (RIGHT_IMAGE_H / 2);
-  int timeAreaY = display.height() / 2 - 40;
-  if (iconTopEstimate < timeAreaY) {
-    timeAreaY = iconTopEstimate;
-    if (timeAreaY < 0)
-      timeAreaY = 0;
-  }
-  int timeAreaW = display.width();
-  int timeAreaH = 96;
-  int iconBottom = iconTopEstimate + RIGHT_IMAGE_H;
-  int areaBottom = timeAreaY + timeAreaH;
-  if (iconBottom > areaBottom) {
-    timeAreaH = iconBottom - timeAreaY;
-    if (timeAreaY + timeAreaH > display.height())
-      timeAreaH = display.height() - timeAreaY;
-  }
-
-  display.setPartialWindow(timeAreaX, timeAreaY, timeAreaW, timeAreaH);
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
-    u8g2Fonts.setCursor(10, timeBaseline);
-    u8g2Fonts.print(currentTime);
-    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-    int dateY = timeBaseline + 15;
-  int dateX = 12; // 对齐 main_old.cpp 的日期 X 坐标
-    u8g2Fonts.setCursor(dateX, dateY);
-    u8g2Fonts.print(currentDate);
-    // 天气行
-    String weatherLine = "";
-    if (currentCity.length() > 0)
-      weatherLine += currentCity;
-    if (currentTemp.length() > 0) {
-      if (weatherLine.length() > 0)
-        weatherLine += " ";
-      weatherLine += currentTemp + String("°C");
-    }
-    if (currentWeather.length() > 0) {
-      if (weatherLine.length() > 0)
-        weatherLine += " ";
-      weatherLine += currentWeather;
-    }
-    int weatherY = dateY + 18;
-    u8g2Fonts.setCursor(dateX, weatherY);
-    u8g2Fonts.print(weatherLine);
-    // 右侧图片
-    int iconX_part = 115;
-    int iconY_part = timeBaseline - (RIGHT_IMAGE_H / 2);
-    if (iconY_part < 0)
-      iconY_part = 0;
-    display.drawBitmap(iconX_part, iconY_part, RightImage, RIGHT_IMAGE_W,
-                       RIGHT_IMAGE_H, GxEPD_BLACK);
-    // 底部一言（不覆盖在此局部窗口外部）
-    int dividerY = display.height() - 18;
-    display.drawFastHLine(0, dividerY, display.width(), GxEPD_BLACK);
-    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-  int availWidth = display.width() - 60; // 局刷时可用宽度与 main_old.cpp 保持一致
-    String fitted = fitToWidthSingleLine(oneLine, availWidth);
-    int hitokotoX = 15;
-    int hitokotoY = dividerY + 15;
-    u8g2Fonts.setCursor(hitokotoX, hitokotoY);
-    u8g2Fonts.print(fitted);
-  } while (display.nextPage());
-
-  lastDisplayedTime = currentTime;
-  lastDisplayedDate = currentDate;
-}
-
-// 局部渲染：占位页（仅显示页码）
-// 延迟全刷控制：先局刷，1s 内无继续切页再全刷
-unsigned long lastPageSwitchMs = 0;
-int pendingFullRefreshPage = -1; // -1 表示无待全刷
-const unsigned long deferredFullDelay = 1000; // ms
-
-// Helper: 切换页面委托给 PageManager
-void switchPageAndFullRefresh(int page) {
-  gPageMgr.switchPage(page);
-  currentPage = gPageMgr.currentIndex();
-}
-void renderPlaceholderPartial(int page) {
-  // 其他页面显示页码
-  int px = 0, py = 0, pw = display.width(), ph = display.height();
-  display.setPartialWindow(px, py, pw, ph);
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
-    // 在屏幕中间显示页码
-    int cx = display.width() / 2;
-    int cy = display.height() / 2;
-    String s = String("Page ") + String(page);
-    int w = u8g2Fonts.getUTF8Width(s.c_str());
-    u8g2Fonts.setCursor(cx - w / 2, cy);
-    u8g2Fonts.print(s);
-  } while (display.nextPage());
-}
+// renderTimePartial, switchPageAndFullRefresh and renderPlaceholderPartial
+// have been moved to page_manager.cpp to reduce main.cpp size.
 
 // 日历页面的按钮处理函数已在 calendar.cpp 中实现
 
@@ -601,9 +448,12 @@ void loop() {
       lastButtonPress = now;
       // 状态变化视为一次交互（消抖、只在确认为方向/按下时触发）
       if (bs == BTN_RIGHT || bs == BTN_LEFT || bs == BTN_CENTER) {
+        int oldPage = gPageMgr.currentIndex();
         gPageMgr.handleButtonEdge(bs);
         currentPage = gPageMgr.currentIndex();
-  pageSwitchCount++; // 保留局刷计数逻辑
+        if (currentPage != oldPage) {
+          pageSwitchCount++; // only count when actual page switch occurred
+        }
       }
       if (bs == BTN_CENTER) {
         Serial.println("BTN_CENTER pressed, currentPage=" +

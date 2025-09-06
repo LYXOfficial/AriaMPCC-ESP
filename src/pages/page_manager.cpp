@@ -2,6 +2,28 @@
 #include "../app_context.h"
 #include <algorithm>
 
+// Helper: placeholder renderer moved here so main can be smaller
+void renderPlaceholderPartial(int page) {
+  int px = 0, py = 0, pw = ::display.width(), ph = ::display.height();
+  ::display.setPartialWindow(px, py, pw, ph);
+  ::display.firstPage();
+  do {
+    ::display.fillScreen(GxEPD_WHITE);
+    ::u8g2Fonts.setFont(u8g2_font_logisoso32_tf);
+    int cx = ::display.width() / 2;
+    int cy = ::display.height() / 2;
+    String s = String("Page ") + String(page);
+    int w = ::u8g2Fonts.getUTF8Width(s.c_str());
+    ::u8g2Fonts.setCursor(cx - w / 2, cy);
+    ::u8g2Fonts.print(s);
+  } while (::display.nextPage());
+}
+
+void switchPageAndFullRefresh(int page) {
+  gPageMgr.switchPage(page);
+  currentPage = gPageMgr.currentIndex();
+}
+
 PageManager::PageManager() {}
 
 void PageManager::setPages(Page **pagesIn, int count) {
@@ -31,13 +53,12 @@ void PageManager::switchPage(int page) {
   currentPage = page;
   lastInteraction = millis();
   ::lastInteraction = lastInteraction;
-
   // quick partial render for feedback
   Serial.println("PageManager.switchPage -> partial render page=" + String(currentPage));
   pages[currentPage]->render(false);
-  // mark deferred full
+  // mark deferred full and record switch time (global)
   pendingFullRefreshPage = currentPage;
-  lastPageSwitchMs = millis();
+  ::lastPageSwitchMs = millis();
 }
 
 void PageManager::requestRender(bool full) {
@@ -50,18 +71,12 @@ void PageManager::handleButtonEdge(PageButton bs) {
   if (!pages || totalPages == 0)
     return;
   lastInteraction = millis();
+  // Always dispatch the button event to the current page. Pages decide whether to
+  // handle it locally or perform page switching (they can call switchPage...).
   if (bs == BTN_LEFT) {
-    if (currentPage == 0) {
-      pages[currentPage]->onLeft();
-    } else {
-      switchPage(currentPage - 1);
-    }
+    pages[currentPage]->onLeft();
   } else if (bs == BTN_RIGHT) {
-    if (currentPage == 0) {
-      pages[currentPage]->onRight();
-    } else {
-      switchPage(currentPage + 1);
-    }
+    pages[currentPage]->onRight();
   } else if (bs == BTN_CENTER) {
     pages[currentPage]->onCenter();
   }
