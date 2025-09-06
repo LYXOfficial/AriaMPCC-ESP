@@ -26,8 +26,12 @@ static const unsigned int lunarInfo[] = {
 static int yearDays(int y) {
   int i, sum = 348; // 29*12
   unsigned int info = lunarInfo[y - 1900];
-  for (i = 0x8000; i > 0x8; i >>= 1) if (info & i) sum += 1;
-  int leap = info & 0xf; if (leap) sum += ((info & 0x10000) ? 30 : 29);
+  for (i = 0x8000; i > 0x8; i >>= 1)
+    if (info & i)
+      sum += 1;
+  int leap = info & 0xf;
+  if (leap)
+    sum += ((info & 0x10000) ? 30 : 29);
   return sum;
 }
 static int monthDays(int y, int m) {
@@ -37,59 +41,101 @@ static int monthDays(int y, int m) {
 static int leapMonth(int y) { return lunarInfo[y - 1900] & 0xf; }
 static long daysBetween1900(int y, int m, int d) {
   long days = 0;
-  for (int i = 1900; i < y; i++) days += (365 + ((i % 4 == 0 && i % 100 != 0) || (i % 400 == 0)));
-  static const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+  for (int i = 1900; i < y; i++)
+    days += (365 + ((i % 4 == 0 && i % 100 != 0) || (i % 400 == 0)));
+  static const int mdays[] = {0,  31, 28, 31, 30, 31, 30,
+                              31, 31, 30, 31, 30, 31};
   for (int i = 1; i < m; i++) {
     days += mdays[i];
-    if (i == 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0))) days += 1;
+    if (i == 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)))
+      days += 1;
   }
   days += d - 1;
   return days - 30; // base 1900-01-31
 }
 
 Lunar SolarToLunar(const Solar &s) {
-  Lunar out = {0,0,0,false};
+  Lunar out = {0, 0, 0, false};
   long offset = daysBetween1900(s.year, s.month, s.day);
   int y = 1900;
   int daysInYear = yearDays(y);
-  while (offset >= daysInYear) { offset -= daysInYear; y++; if (y > 2100) break; daysInYear = yearDays(y);} 
+  while (offset >= daysInYear) {
+    offset -= daysInYear;
+    y++;
+    if (y > 2100)
+      break;
+    daysInYear = yearDays(y);
+  }
   out.year = y;
   int leap = leapMonth(y);
   bool isLeap = false;
   int m = 1;
   while (true) {
     int mdays = 0;
-    if (m == leap + 1 && leap > 0 && !isLeap) { mdays = (lunarInfo[y - 1900] & 0x10000) ? 30 : 29; isLeap = true; }
-    else { mdays = monthDays(y, m); if (isLeap) isLeap = false; }
-    if (offset < mdays) break;
+    if (m == leap + 1 && leap > 0 && !isLeap) {
+      mdays = (lunarInfo[y - 1900] & 0x10000) ? 30 : 29;
+      isLeap = true;
+    } else {
+      mdays = monthDays(y, m);
+      if (isLeap)
+        isLeap = false;
+    }
+    if (offset < mdays)
+      break;
     offset -= mdays;
-    if (!isLeap) m++;
+    if (!isLeap)
+      m++;
   }
-  out.month = m; out.day = offset + 1; out.isLeap = (leap > 0 && isLeap);
+  out.month = m;
+  out.day = offset + 1;
+  out.isLeap = (leap > 0 && isLeap);
   return out;
 }
 
 Solar LunarToSolar(const Lunar &l) {
-  Solar s = {0,0,0};
+  Solar s = {0, 0, 0};
   long offset = 0;
-  for (int i = 1900; i < l.year; i++) offset += yearDays(i);
-  int leap = leapMonth(l.year); bool usedLeap = false;
+  for (int i = 1900; i < l.year; i++)
+    offset += yearDays(i);
+  int leap = leapMonth(l.year);
+  bool usedLeap = false;
   int m = 1;
   while (m < l.month) {
-    if (leap > 0 && m == leap + 1 && !usedLeap) { offset += ((lunarInfo[l.year - 1900] & 0x10000) ? 30 : 29); usedLeap = true; }
-    else { offset += monthDays(l.year, m); if (usedLeap) usedLeap = false; else m++; }
+    if (leap > 0 && m == leap + 1 && !usedLeap) {
+      offset += ((lunarInfo[l.year - 1900] & 0x10000) ? 30 : 29);
+      usedLeap = true;
+    } else {
+      offset += monthDays(l.year, m);
+      if (usedLeap)
+        usedLeap = false;
+      else
+        m++;
+    }
   }
   offset += (l.day - 1);
   long total = offset + 30;
   int y = 1900;
   while (true) {
     int daysy = 365 + ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0));
-    if (total < daysy) break; total -= daysy; y++;
+    if (total < daysy)
+      break;
+    total -= daysy;
+    y++;
   }
-  static const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
-  int month = 1; while (true) {
-    int dm = mdays[month]; if (month == 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0))) dm++;
-    if (total < dm) break; total -= dm; month++;
+  static const int mdays[] = {0,  31, 28, 31, 30, 31, 30,
+                              31, 31, 30, 31, 30, 31};
+  int month = 1;
+  while (true) {
+    int dm = mdays[month];
+    if (month == 2 && ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)))
+      dm++;
+    if (total < dm)
+      break;
+    total -= dm;
+    month++;
   }
-  s.year = y; s.month = month; s.day = total + 1; return s;
+  s.year = y;
+  s.month = month;
+  s.day = total + 1;
+  return s;
 }

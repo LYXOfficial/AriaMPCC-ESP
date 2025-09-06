@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Arduino.h>
 #include "page.h"
+#include <Arduino.h>
 
 enum PageButton { BTN_NONE = 0, BTN_RIGHT, BTN_LEFT, BTN_CENTER };
 
@@ -36,8 +36,9 @@ private:
   unsigned long lastInteraction = 0;
 
   // deferred full refresh
-    int pendingFullRefreshPage = -1;
-    // unsigned long lastPageSwitchMs; // Keep as a private member only, remove initializer
-  unsigned long deferredFullDelay = 500;
+  int pendingFullRefreshPage = -1;
+  // unsigned long lastPageSwitchMs; // Keep as a private member only, remove
+  // initializer
+  unsigned long deferredFullDelay = 1000;
   unsigned long inactivityTimeout = 30 * 1000;
 };
