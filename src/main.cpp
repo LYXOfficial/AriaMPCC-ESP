@@ -190,6 +190,9 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // keep per-alarm last triggered minute to avoid retriggering within same minute
+  static int lastAlarmTriggerMinute[5] = {-1, -1, -1, -1, -1};
+
   // 读取按钮状态（拨杆）
   PageButton bs = (PageButton)readButtonStateRaw();
   // 如果当前处于全刷过程中，忽略按键输入
@@ -333,6 +336,31 @@ void loop() {
       Serial.println("Periodic time check -> request partial render for page=" +
                      String(gPageMgr.currentIndex()));
       gPageMgr.requestRender(false);
+    }
+    // Alarm check: run every second but only trigger once per minute per alarm
+    // Use NTP time for correctness
+    time_t raw = timeClient.getEpochTime();
+    struct tm *tm = localtime(&raw);
+    int curHour = tm->tm_hour;
+    int curMin = tm->tm_min;
+    int curWday = tm->tm_wday; // 0 = Sunday .. 6 = Saturday
+    for (int i = 0; i < 5; i++) {
+      Alarm a = getAlarmCfg(i);
+      if (!a.enabled) continue;
+      // check weekday mask: if weekdays == 0 treat as everyday
+      bool weekdayMatch = (a.weekdays == 0) || ((a.weekdays & (1 << curWday)) != 0);
+      if (!weekdayMatch) continue;
+      if (a.hour == curHour && a.minute == curMin) {
+        if (lastAlarmTriggerMinute[i] != curMin) {
+          lastAlarmTriggerMinute[i] = curMin;
+          Serial.println("Triggering alarm " + String(i) + " at " + String(curHour) + ":" + String(curMin));
+          startAlarmNow(i);
+        }
+      } else {
+        // reset per-minute lock when time moved away
+        if (lastAlarmTriggerMinute[i] == curMin)
+          lastAlarmTriggerMinute[i] = -1;
+      }
     }
   }
 

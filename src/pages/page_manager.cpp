@@ -57,6 +57,12 @@ void PageManager::switchPage(int page) {
   // quick partial render for feedback
   Serial.println("PageManager.switchPage -> partial render page=" +
                  String(currentPage));
+  // If switching to the home page, clear the cached lastDisplayedTime so
+  // HomeTimePage::renderPartial() will not early-return and will update the
+  // displayed time immediately.
+  if (currentPage == 0) {
+    ::lastDisplayedTime = "";
+  }
   pages[currentPage]->render(false);
   // mark deferred full and record switch time (global)
   pendingFullRefreshPage = currentPage;

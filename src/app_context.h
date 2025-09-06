@@ -29,6 +29,10 @@ extern volatile bool refreshInProgress;
 void switchPageAndFullRefresh(int page);
 void renderPlaceholderPartial(int page);
 
+// Alarm engine control: start/stop and state
+void startAlarmNow(int idx);
+extern volatile bool alarmRinging;
+
 // Forward declare PageManager and extern global instance (defined in main.cpp)
 class PageManager;
 extern PageManager gPageMgr;

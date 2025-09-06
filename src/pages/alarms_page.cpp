@@ -46,6 +46,8 @@ static Alarm getAlarm(int idx) {
     idx = 4;
   return s_alarms[idx];
 }
+// Public wrapper
+Alarm getAlarmCfg(int idx) { return getAlarm(idx); }
 static void setAlarm(int idx, const Alarm &a) {
   if (idx < 0 || idx > 4)
     return;
