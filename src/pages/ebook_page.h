@@ -20,8 +20,6 @@ public:
   void startPrecomputeAsync(int centerIndex);
   // approximate total pages based on file size and first-page byte length
   int estimateTotalPagesApprox();
-  // show loading overlay while synchronous indexing happens
-  void showLoadingPartial();
   int getPageIndex() const { return pageIndex; }
 
 private:
@@ -42,10 +40,6 @@ private:
   // pagination config (visual lines per page)
   // limit to 6 lines so content area stays above divider; spacing handled in render
   const int linesPerPage = 6;
-  // estimated pages computed from file size (approx)
-  int estimatedTotalPages = 0;
-  // true when we've reached EOF and built exact index
-  bool fullyIndexed = false;
 
   // build page offset index by streaming the file (no full-load)
   bool buildPageIndex(const String &absPath);

@@ -13,6 +13,8 @@
 #include <WiFiManager.h>
 #include <WiFiUdp.h>
 #include <time.h>
+#include <sys/time.h>
+#include <Preferences.h>
 GxEPD2_BW<GxEPD2_213_B72, GxEPD2_213_B72::HEIGHT>
     display(GxEPD2_213_B72(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 
@@ -33,6 +35,9 @@ WiFiUDP ntpUDP;
 NTPClient
     timeClient(ntpUDP, "ntp.aliyun.com", 8 * 3600,
                60000); // 使用阿里云NTP服务器，中国时区(+8)，每分钟更新一次
+
+// RTC 保持的最后一次同步时间（备份），在深度睡眠/重启间保留（取决于芯片）
+RTC_DATA_ATTR uint32_t rtc_saved_epoch = 0;
 
 // home/time related globals moved to pages/time_page.cpp
 
@@ -136,10 +141,41 @@ void setup() {
     u8g2Fonts.println("正在同步时间...");
   } while (display.nextPage());
 
-  // 初始化NTP客户端
+  // 初始化NTP客户端并尝试同步
   timeClient.begin();
-  timeClient.update();
-  Serial.println("NTP时间同步完成");
+  bool ntpOk = timeClient.update();
+  if (ntpOk) {
+    Serial.println("NTP时间同步完成");
+    // 保存到 RTC 备份与 Preferences 以便离线时回退
+    rtc_saved_epoch = (uint32_t)timeClient.getEpochTime();
+    Preferences pf; pf.begin("time", false);
+    pf.putUInt("last_epoch", rtc_saved_epoch);
+    pf.end();
+    // also set system time from NTP to ensure libc time functions are correct
+    time_t now = (time_t)rtc_saved_epoch;
+    struct timeval tv = { .tv_sec = now, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+  } else {
+    Serial.println("NTP 时间同步失败，尝试使用 RTC/NVS 回退时间");
+    // Attempt to restore from RTC_DATA_ATTR saved value first
+    uint32_t useEpoch = rtc_saved_epoch;
+    if (useEpoch == 0) {
+      // try Preferences stored value
+      Preferences pf; pf.begin("time", true);
+      useEpoch = pf.getUInt("last_epoch", 0);
+      pf.end();
+    }
+    if (useEpoch != 0) {
+      Serial.println("恢复时间自备份 epoch=" + String(useEpoch));
+      time_t now = (time_t)useEpoch;
+      struct timeval tv = { .tv_sec = now, .tv_usec = 0 };
+      settimeofday(&tv, NULL);
+      // inform timeClient of the epoch so calls like getEpochTime work
+      // NTPClient doesn't expose a setter; we rely on system time now being set
+    } else {
+      Serial.println("未找到有效备份时间，继续使用设备启动时默认时间");
+    }
+  }
 
   // 初始化全刷新时间戳
   lastFullRefresh = millis();
@@ -207,7 +243,30 @@ bool openEbookFromPath(const String &path) {
   Page *p6 = gPages[6];
   if (!p6) return false;
   EBookPage *ep = (EBookPage *)p6;
+  // show a small loading prompt immediately before starting potentially
+  // blocking pagination work so user sees feedback (draw boxed popup)
+  int px = 20;
+  int py = 30;
+  int pw = display.width() - 80;
+  int ph = 28;
+  display.setPartialWindow(px, py, pw, ph);
+  display.firstPage();
+  do {
+    display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+    display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+    u8g2Fonts.setForegroundColor(GxEPD_BLACK);
+    u8g2Fonts.setCursor(px + 10, py + 18);
+    u8g2Fonts.print("加载中...");
+  } while (display.nextPage());
+
   bool ok = ep->openFromFile(path);
+  if (!ok) {
+    // clear the partial overlay so subsequent UI (error) is visible
+    display.setFullWindow();
+    display.firstPage();
+    do { display.fillScreen(GxEPD_WHITE); } while (display.nextPage());
+  }
   if (ok) {
     switchPageAndFullRefresh(6);
     return true;

@@ -106,7 +106,7 @@ void FilesPage::refreshEntries() {
   if (topIndex < 0)
     topIndex = 0;
   if (highlightedRow < 0)
-    highlightedRow = 0;
+    highlightedRow = (currentDir == "/") ? -1 : 0;
   if (topIndex > max(0, totalEntries - 4))
     topIndex = max(0, totalEntries - 4);
   if (highlightedRow > 3)
@@ -305,6 +305,12 @@ void FilesPage::onLeft() {
     // If at root and an entry is highlighted (or selection active), do nothing
     // (user wanted no response instead of triggering a page switch).
     if (currentDir == "/") {
+      // If we're at root, clear any selection/highlight instead of doing
+      // nothing so user gets feedback that left collapsed selection.
+      highlightedRow = -1;
+      selectionActive = false;
+      render(false); // partial refresh to update list/footer quickly
+      lastInteraction = millis();
       return;
     }
     // navigate up one directory
@@ -477,7 +483,7 @@ void FilesPage::openSelected() {
         testDir.close();
         found = true;
       }
-      if (!found) {
+  if (!found) {
         // cannot open directory -> show error and abort
         display.setFullWindow();
         display.firstPage();
@@ -497,14 +503,33 @@ void FilesPage::openSelected() {
       }
       candidate = path;
       currentDir = candidate;
+      // show a small loading prompt when entering a directory to indicate work
+      int px = 10;
+      int py = 30;
+      int pw = display.width() - 80;
+      int ph = 28;
+      display.setPartialWindow(px, py, pw, ph);
+      display.firstPage();
+      do {
+        // draw white background and black border for a compact popup
+        display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+        display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+        u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+        u8g2Fonts.setForegroundColor(GxEPD_BLACK);
+        u8g2Fonts.setCursor(px + 8, py + 18);
+        u8g2Fonts.print("加载中...");
+      } while (display.nextPage());
     }
     // refresh and reset window
     selectionActive = false;
     topIndex = 0;
-    // after refresh, set highlightedRow to first real entry (if ../ was present
-    // it will be at index 0, so we prefer to highlight the first real file
-    // which comes after ../)
-    highlightedRow = 0;
+      // after refresh, set highlightedRow to first real entry (if ../ was present
+      // it will be at index 0, so we prefer to highlight the first real file
+      // which comes after ../). For root directory, keep no selection (-1).
+      if (currentDir == "/")
+        highlightedRow = -1;
+      else
+        highlightedRow = 0;
     refreshEntries();
     // ensure indices are valid after entries refresh to avoid drawing an
     // invalid highlighted row which can cause glyphs to render incorrectly
@@ -525,7 +550,7 @@ void FilesPage::openSelected() {
     }
     // entering a new directory is a substantial layout change; do a full
     // refresh to ensure all regions (list + footer) are correctly drawn
-    render(true);
+  render(true);
     lastInteraction = millis();
     return;
   }

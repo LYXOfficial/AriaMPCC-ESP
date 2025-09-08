@@ -53,8 +53,6 @@ bool EBookPage::buildPageIndex(const String &absPath) {
   f.close();
   // compute first couple pages synchronously to ensure pagination is available
   // immediately after opening (avoid showing only one page for large files)
-  fullyIndexed = false;
-  estimatedTotalPages = estimateTotalPagesApprox();
   ensurePageIndexUpTo(2);
   return true;
 }
@@ -67,47 +65,91 @@ unsigned long EBookPage::computeNextPageOffset(unsigned long startOffset) {
   f.seek(startOffset);
   const int maxWidth = display.width() - 40;
   int lineCount = 0;
-  String currentLine = "";
+  // use a fixed buffer for current visual line to avoid String churn
+  char lineBuf[512];
+  size_t lineLen = 0;
+  lineBuf[0] = '\0';
+
+  auto charWidth = [&](const uint8_t *bytes, int cb) -> int {
+    char tmp[5];
+    if (cb > 4) cb = 4;
+    for (int i = 0; i < cb; ++i) tmp[i] = (char)bytes[i];
+    tmp[cb] = '\0';
+    return u8g2Fonts.getUTF8Width(tmp);
+  };
 
   while (f.available()) {
-    uint8_t fb = f.read();
+    uint8_t first = f.read();
     offset++;
     int cb = 1;
-    if ((fb & 0x80) != 0) {
-      if ((fb & 0xE0) == 0xC0) cb = 2;
-      else if ((fb & 0xF0) == 0xE0) cb = 3;
-      else if ((fb & 0xF8) == 0xF0) cb = 4;
+    if ((first & 0x80) != 0) {
+      if ((first & 0xE0) == 0xC0) cb = 2;
+      else if ((first & 0xF0) == 0xE0) cb = 3;
+      else if ((first & 0xF8) == 0xF0) cb = 4;
     }
-    String ch = "";
-    ch += (char)fb;
+    uint8_t bytes[4];
+    bytes[0] = first;
     for (int i = 1; i < cb; ++i) {
-      if (!f.available()) break;
-      uint8_t nb = f.read();
-      ch += (char)nb;
+      if (!f.available()) { cb = i; break; }
+      bytes[i] = f.read();
       offset++;
     }
-    if (ch == "\n") {
+    // newline as line break
+    if (cb == 1 && bytes[0] == '\n') {
       lineCount++;
-      currentLine = "";
+      lineLen = 0;
+      lineBuf[0] = '\0';
       if (lineCount >= linesPerPage) {
         f.close();
         return offset;
       }
       continue;
     }
-    String cand = currentLine + ch;
-    int w = u8g2Fonts.getUTF8Width(cand.c_str());
-    if (w > maxWidth) {
+
+    // if line buffer would overflow, force a wrap
+    if (lineLen + (size_t)cb >= sizeof(lineBuf) - 1) {
       lineCount++;
-      currentLine = ch;
-      int cw = u8g2Fonts.getUTF8Width(currentLine.c_str());
-      if (cw > maxWidth) currentLine = "";
+      // start next line with this char if it fits width, else drop
+      int cw = charWidth(bytes, cb);
+      if (cw > maxWidth) {
+        lineLen = 0;
+        lineBuf[0] = '\0';
+      } else {
+        memcpy(lineBuf, bytes, cb);
+        lineLen = cb;
+        lineBuf[lineLen] = '\0';
+      }
+      if (lineCount >= linesPerPage) {
+        f.close();
+        return offset;
+      }
+      continue;
+    }
+
+    // probe width with this char appended
+    memcpy(lineBuf + lineLen, bytes, cb);
+    lineBuf[lineLen + cb] = '\0';
+    int w = u8g2Fonts.getUTF8Width(lineBuf);
+    if (w > maxWidth) {
+      // wrap before this char
+      lineCount++;
+      int cw = charWidth(bytes, cb);
+      if (cw > maxWidth) {
+        // too wide alone: skip to avoid infinite loop
+        lineLen = 0;
+        lineBuf[0] = '\0';
+      } else {
+        memcpy(lineBuf, bytes, cb);
+        lineLen = cb;
+        lineBuf[lineLen] = '\0';
+      }
       if (lineCount >= linesPerPage) {
         f.close();
         return offset;
       }
     } else {
-      currentLine = cand;
+      // keep appended
+      lineLen += cb;
     }
   }
   // EOF reached: next page is EOF
@@ -120,6 +162,12 @@ unsigned long EBookPage::computeNextPageOffset(unsigned long startOffset) {
 bool EBookPage::ensurePageIndexUpTo(int idx) {
   if (idx < (int)pageOffsets.size()) return true;
   // compute pages until we have idx+1 start offsets or reach EOF
+  // fetch file size once to avoid repeated open/close
+  unsigned long fsz = 0xFFFFFFFF;
+  {
+    File ff = SD.open(openedPath.c_str());
+    if (ff) { fsz = (unsigned long)ff.size(); ff.close(); }
+  }
   while ((int)pageOffsets.size() <= idx) {
     unsigned long last = pageOffsets.back();
     unsigned long next = computeNextPageOffset(last);
@@ -130,17 +178,7 @@ bool EBookPage::ensurePageIndexUpTo(int idx) {
     pageOffsets.push_back(next);
     if (s_pageOffsetsMutex) xSemaphoreGive(s_pageOffsetsMutex);
     // stop if we've reached EOF
-    {
-      File ff = SD.open(openedPath.c_str());
-      if (!ff) break;
-      unsigned long fsz = (unsigned long)ff.size();
-      ff.close();
-      if (next >= fsz) {
-        // we've reached EOF -> index is complete
-        fullyIndexed = true;
-        break;
-      }
-    }
+    if (next >= fsz) break;
   }
   return idx < (int)pageOffsets.size();
 }
@@ -185,31 +223,22 @@ int EBookPage::estimateTotalPagesApprox() {
 
 String EBookPage::loadPageContent(int idx) {
   String out;
-  if (idx < 0) return out;
+  if (idx < 0 || idx >= (int)pageOffsets.size()) return out;
   File f = SD.open(openedPath.c_str());
   if (!f) return out;
-  unsigned long start = (pageOffsets.size() > idx) ? pageOffsets[idx] : 0;
-  unsigned long end = 0;
-  bool haveEnd = false;
-  if (idx + 1 < (int)pageOffsets.size()) {
-    end = pageOffsets[idx + 1];
-    haveEnd = true;
+  // ensure we have the end offset for this page to avoid reading to EOF
+  if (idx + 1 >= (int)pageOffsets.size()) {
+    ensurePageIndexUpTo(idx + 1);
   }
-  // if we don't yet know the next page offset, only read a reasonable chunk
-  const unsigned long maxReadIfUnknown = 4096; // don't read whole file
-  unsigned long toRead = 0;
-  if (haveEnd) toRead = end - start;
-  else {
-    File tf = SD.open(openedPath.c_str());
-    if (tf) {
-      unsigned long fsz = (unsigned long)tf.size();
-      tf.close();
-      unsigned long remain = (fsz > start) ? (fsz - start) : 0;
-      toRead = (remain > maxReadIfUnknown) ? maxReadIfUnknown : remain;
-    } else toRead = maxReadIfUnknown;
-  }
+  unsigned long start = pageOffsets[idx];
+  unsigned long end = (idx + 1 < (int)pageOffsets.size()) ? pageOffsets[idx + 1] : (unsigned long)f.size();
   // seek and read range
   f.seek(start);
+  unsigned long toRead = end - start;
+  // reserve a reasonable capacity to reduce reallocations (page sizes are small)
+  size_t cap = (size_t)toRead;
+  if (cap > 4096) cap = 4096;
+  out.reserve(cap);
   const unsigned long chunk = 256;
   while (toRead > 0 && f.available()) {
     unsigned long r = (toRead > chunk) ? chunk : toRead;
@@ -217,30 +246,26 @@ String EBookPage::loadPageContent(int idx) {
     size_t got = f.read((uint8_t *)buf, r);
     if (got == 0) break;
     buf[got] = 0;
-    out += String(buf);
+    // avoid creating temporary String objects; append C string directly
+    out += (const char *)buf;
     toRead -= got;
   }
   f.close();
   return out;
 }
 
-void EBookPage::showLoadingPartial() {
-  int pw = 80;
-  int ph = 40;
-  int px = (display.width() - pw) / 2;
-  int py = (display.height() - ph) / 2;
-  display.setPartialWindow(px, py, pw, ph);
-  display.firstPage();
-  do {
-    display.fillRect(px, py, pw, ph, GxEPD_WHITE);
-    display.drawRect(px, py, pw, ph, GxEPD_BLACK);
-    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-    u8g2Fonts.setCursor(px + 16, py + 22);
-    u8g2Fonts.print("加载中...");
-  } while (display.nextPage());
-}
-
 bool EBookPage::openFromFile(const String &absPath) {
+  // detect encoding heuristically and store to prefs if user hasn't configured
+  ETextEncoding enc = detectEncodingFromFile(absPath, 8192);
+  // store as integer in preferences under key provided by encoding helper
+  Preferences encpf; encpf.begin("ebook", false);
+  const char *k = ebookEncodingPrefKey();
+  int existing = encpf.getInt(k, -1); // -1 means unset
+  if (existing == -1) {
+    encpf.putInt(k, (int)enc);
+  }
+  encpf.end();
+
   bool ok = buildPageIndex(absPath);
   if (!ok) return false;
   hasFile = true;
@@ -252,13 +277,6 @@ bool EBookPage::openFromFile(const String &absPath) {
   String key = String("p") + String(h);
   pageIndex = prefs.getUShort(key.c_str(), 0);
   prefs.end();
-  // show loading overlay while we synchronously ensure needed indices
-  showLoadingPartial();
-  // ensure at least up to restored pageIndex (but cap synchronous work to estimatedTotalPages)
-  int cap = estimatedTotalPages > 0 ? estimatedTotalPages : pageIndex + 2;
-  int target = pageIndex;
-  if (target > cap) target = cap;
-  ensurePageIndexUpTo(target);
   // clamp restored pageIndex to valid range
   if (pageOffsets.empty()) pageIndex = 0;
   else if (pageIndex >= (int)pageOffsets.size()) pageIndex = (int)pageOffsets.size() - 1;
@@ -385,8 +403,21 @@ void EBookPage::render(bool full) {
       struct tm *tm = localtime(&raw);
       char timestr[6];
       sprintf(timestr, "%02d:%02d", tm->tm_hour, tm->tm_min);
-  int totalApprox = (pageOffsets.size() > 1) ? (int)pageOffsets.size() : estimateTotalPagesApprox();
-  String pageinfo = String(timestr) + " " + String(pageIndex + 1) + "/" + String(totalApprox);
+          // Determine page total to display: prefer actual if we have more than 1
+          // page computed; otherwise show estimate. Preserve estimate until actual
+          // page count strictly exceeds estimate or EOF is reached.
+          int actualCount = 0;
+          if (s_pageOffsetsMutex && xSemaphoreTake(s_pageOffsetsMutex, pdMS_TO_TICKS(50))) {
+            actualCount = (int)pageOffsets.size();
+            xSemaphoreGive(s_pageOffsetsMutex);
+          } else {
+            actualCount = (int)pageOffsets.size();
+          }
+          int approx = estimateTotalPagesApprox();
+          int totalShown = (actualCount > approx) ? actualCount : approx;
+          // If actualCount==0 fallback to approx
+          if (actualCount == 0) totalShown = approx;
+          String pageinfo = String(timestr) + " " + String(pageIndex + 1) + "/" + String(totalShown);
       int tw = u8g2Fonts.getUTF8Width(pageinfo.c_str());
       u8g2Fonts.setCursor(display.width() - tw - 40, display.height() - 4);
       u8g2Fonts.print(pageinfo);
@@ -409,8 +440,8 @@ void EBookPage::render(bool full) {
     display.fillScreen(GxEPD_WHITE);
     u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
     u8g2Fonts.setForegroundColor(GxEPD_BLACK);
-  // ensure current page index exists (lazy compute if necessary)
-  ensurePageIndexUpTo(pageIndex);
+    // ensure current page start and next page start exist to bound reads
+    ensurePageIndexUpTo(pageIndex + 1);
   // draw text content (load on-demand to avoid large RAM usage)
   String p = loadPageContent(pageIndex);
   int x = 0;
@@ -428,8 +459,19 @@ void EBookPage::render(bool full) {
     struct tm *tm = localtime(&raw);
     char timestr[6];
     sprintf(timestr, "%02d:%02d", tm->tm_hour, tm->tm_min);
-  int totalApprox = (pageOffsets.size() > 1) ? (int)pageOffsets.size() : estimateTotalPagesApprox();
-  String pageinfo = String(timestr) + " " + String(pageIndex + 1) + "/" + String(totalApprox);
+      // prefer showing actual if > estimate; otherwise show estimate until it is
+      // outgrown. Use mutex for safe read of pageOffsets when available.
+      int actualCountFull = 0;
+      if (s_pageOffsetsMutex && xSemaphoreTake(s_pageOffsetsMutex, pdMS_TO_TICKS(50))) {
+        actualCountFull = (int)pageOffsets.size();
+        xSemaphoreGive(s_pageOffsetsMutex);
+      } else {
+        actualCountFull = (int)pageOffsets.size();
+      }
+      int approxFull = estimateTotalPagesApprox();
+      int totalShownFull = (actualCountFull > approxFull) ? actualCountFull : approxFull;
+      if (actualCountFull == 0) totalShownFull = approxFull;
+      String pageinfo = String(timestr) + " " + String(pageIndex + 1) + "/" + String(totalShownFull);
   int tw = u8g2Fonts.getUTF8Width(pageinfo.c_str());
   u8g2Fonts.setCursor(display.width() - tw - 40, display.height() - 4);
   u8g2Fonts.print(pageinfo);
@@ -451,7 +493,7 @@ void EBookPage::render(bool full) {
 
 void EBookPage::showPromptPartial() {
   // small centered box with "长按2秒退出..."
-  int pw = 80;
+  int pw = 120;
   int ph = 40;
   int px = (display.width() - pw) / 2;
   int py = (display.height() - ph) / 2;

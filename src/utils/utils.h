@@ -25,3 +25,7 @@ String getHitokoto();
 int readButtonStateRaw();
 extern unsigned long lastButtonPress;
 extern const unsigned long debounceDelay;
+
+// Encoding detection helpers
+#include "encoding.h"
+
