@@ -21,6 +21,8 @@ U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 #include "app_context.h"
 #include "pages/alarms_page.h"
 #include "pages/calendar_page.h"
+#include "pages/files_page.h"
+#include "pages/ebook_page.h"
 #include "pages/page_manager.h"
 #include "pages/time_page.h"
 #include "utils/lunar.h"
@@ -55,12 +57,12 @@ void renderPlaceholderPartial(int page);
 
 // ---------- 页面翻页逻辑（由 PageManager 接管） ----------
 int currentPage = 0;               // 暂时保留供模块访问
-const int totalPages = 6;          // 页面总数
+const int totalPages = 7;          // 页面总数（增加 ebook 页面）
 unsigned long lastInteraction = 0; // 供少量模块使用
 int pageSwitchCount = 0;           // 保留计数逻辑
 const int partialBeforeFull = 5;
 PageManager gPageMgr;
-static Page *gPages[6] = {nullptr};
+static Page *gPages[7] = {nullptr};
 static PageButton lastButtonState = BTN_NONE;
 // single global definition for lastPageSwitchMs
 unsigned long lastPageSwitchMs = 0;
@@ -74,6 +76,9 @@ unsigned long lastPageSwitchMs = 0;
 
 void setup() {
   Serial.begin(9600);
+  // ensure buzzer pin is in defined state to avoid idle noise
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
   SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN, EPD_CS_PIN);
   display.init();
   display.setRotation(1);
@@ -155,7 +160,9 @@ void setup() {
   // Use dedicated Page wrappers
   gPages[1] = new CalendarPage();
   gPages[2] = new AlarmsPage();
-  // Placeholder pages 3..5
+  // Page 3: Files browser
+  gPages[3] = new FilesPage();
+  // Placeholder pages 4..5
   class Placeholder : public Page {
   public:
     int index;
@@ -166,10 +173,11 @@ void setup() {
     void onCenter() override {}
     const char *name() const override { return "placeholder"; }
   };
-  gPages[3] = new Placeholder(3);
   gPages[4] = new Placeholder(4);
   gPages[5] = new Placeholder(5);
-  gPageMgr.setPages(gPages, 6);
+  // EBook page at index 6
+  gPages[6] = new EBookPage();
+  gPageMgr.setPages(gPages, 7);
   gPageMgr.begin();
   lastInteraction = millis();
   lastButtonState = (PageButton)readButtonStateRaw();
@@ -178,13 +186,33 @@ void setup() {
 
   Serial.println("Initializing SD card...");
   if (!SD.begin(SD_CS_PIN)) {
-    Serial.println("initialization failed!");
-    return;
+    Serial.println("SD initialization failed, continuing without SD");
+    // keep running but FilesPage will show empty entries until SD is mounted
+  } else {
+    Serial.println("SD initialization done.");
+    // If FilesPage exists, refresh entries now that filesystem is mounted
+    Page *p3 = gPages[3];
+    if (p3) {
+      // safe cast because we know page 3 is FilesPage
+      ((FilesPage *)p3)->refreshEntries();
+    }
   }
-  Serial.println("initialization done.");
   audio.setPinout(I2S_BCLK_PIN, I2S_WS_PIN, I2S_DOUT_PIN);
   audio.setI2SCommFMT_LSB(true);
   audio.setVolume(255);
+}
+
+bool openEbookFromPath(const String &path) {
+  // gPages array holds our page instances; index 6 is EBookPage
+  Page *p6 = gPages[6];
+  if (!p6) return false;
+  EBookPage *ep = (EBookPage *)p6;
+  bool ok = ep->openFromFile(path);
+  if (ok) {
+    switchPageAndFullRefresh(6);
+    return true;
+  }
+  return false;
 }
 
 void loop() {
@@ -208,8 +236,8 @@ void loop() {
   if (bs != lastButtonState) {
     // 按键边沿变化 - 先做防抖（忽略短时间内的抖动）
     if (now - lastButtonPress < debounceDelay) {
-      // 忽略此次变化
-      lastButtonState = bs;
+      // 忽略此次变化：不要在防抖窗口内覆盖 lastButtonState，
+      // 保持先前稳定状态直到防抖期结束以避免丢失待确认的边沿。
     } else {
       // 记录此次为有效按键时间
       lastButtonPress = now;

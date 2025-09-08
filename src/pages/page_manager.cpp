@@ -121,6 +121,26 @@ void PageManager::loop() {
   }
   // inactivity auto-home: respect global lastInteraction updated by pages
   if ((now - ::lastInteraction) > inactivityTimeout && currentPage != 0) {
-    switchPage(0);
+  switchPage(0);
+  // ensure the global currentPage (used by main and other modules) is
+  // synchronized when auto-navigating home
+  ::currentPage = currentPage;
+  }
+
+  // periodic footer update for ebook page: update right-bottom time every minute
+  static unsigned long lastEbookFooterMs = 0;
+  if (!::refreshInProgress && pages && currentPage >= 0 && currentPage < totalPages) {
+    const char *pname = pages[currentPage]->name();
+    if (pname && strcmp(pname, "ebook") == 0) {
+      if (now - lastEbookFooterMs >= 60UL * 1000UL) {
+        // refresh NTP and request a light partial render for footer
+        ::timeClient.update();
+        pages[currentPage]->render(false);
+        lastEbookFooterMs = now;
+      }
+    } else {
+      // reset timer when leaving ebook page
+      lastEbookFooterMs = now;
+    }
   }
 }

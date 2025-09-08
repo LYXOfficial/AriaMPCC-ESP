@@ -9,6 +9,44 @@
 volatile bool alarmRinging = false;
 static volatile int activeAlarmIdx = -1;
 
+// helper to manage buzzer without using Arduino tone API
+static const int BUZZER_LEDC_CHANNEL = 0;
+static bool buzzerLEDCInited = false;
+
+static void initBuzzerLEDC(int freq) {
+#ifdef BUZZER_PIN
+  // configure LEDC channel for buzzer
+  ledcSetup(BUZZER_LEDC_CHANNEL, freq, 8); // 8-bit resolution
+  ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CHANNEL);
+  buzzerLEDCInited = true;
+#endif
+}
+
+static void startBuzzerFreq(int freq) {
+#ifdef BUZZER_PIN
+  if (!buzzerLEDCInited)
+    initBuzzerLEDC(freq);
+  else
+    ledcSetup(BUZZER_LEDC_CHANNEL, freq, 8);
+  // 50% duty
+  ledcWrite(BUZZER_LEDC_CHANNEL, 128);
+#endif
+}
+
+// stop buzzer and drive pin low to avoid floating/noise
+static inline void stopBuzzer() {
+#ifdef BUZZER_PIN
+  if (buzzerLEDCInited) {
+    ledcWrite(BUZZER_LEDC_CHANNEL, 0);
+    // detach to leave pin controllable
+    ledcDetachPin(BUZZER_PIN);
+    buzzerLEDCInited = false;
+  }
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+#endif
+}
+
 // Simple melody representation: array of {freq, ms}
 struct Note {
   int freq;
@@ -16,47 +54,100 @@ struct Note {
 };
 
 // Five simple melodies (short excerpts) using frequency in Hz.
-// Melody 1: Twinkle Twinkle (intro)
-static const Note melody1[] = {{392, 300}, {392, 300}, {440, 300}, {440, 300},
-                               {392, 300}, {392, 300}, {330, 600}};
+// Melody 1: "Haruhikage" from MyGO!!!!! (first 8 bars)
+// 可以和我组一辈子乐队吗 为什么要演奏春日影！
+// Converted from Jianpu score, 1=C, 6/8, dotted quarter = 97bpm
+// Eighth note duration is approx. 206ms
+static const Note melody1[] = {
+    // Bar 1: 3' 2' 1' 2' (quarter, eighth, quarter, eighth)
+    {622, 412},
+    {554, 206},
+    {466, 412},
+    {554, 206},
+    // Bar 2: 3'. 4'3' 2' (dotted quarter, two eighths, quarter) -> Corrected to
+    // fit 6/8
+    {622, 309},
+    {698, 103},
+    {622, 206},
+    {554, 618}};
 static const int melody1_len = sizeof(melody1) / sizeof(melody1[0]);
-// Melody 2: Fur Elise (opening)
-static const Note melody2[] = {{659, 200}, {622, 200}, {659, 200}, {622, 200},
-                               {659, 200}, {494, 200}, {587, 200}, {523, 400}};
+// Melody 2: 你从丹东来 \😭/
+// 1=E, 4/4, approx 120bpm (quarter note = 500ms)
+static const Note melody2[] = {
+    // 你从丹东来
+    {554, 125},
+    {659, 125},
+    {740, 125},
+    {831, 125},
+    {740, 250},
+    // 换我一城雪白
+    {659, 125},
+    {622, 125},
+    {554, 125},
+    {622, 250},
+    {494, 125},
+    {554, 375},
+    // 想吃广东菜
+    {554, 125},
+    {659, 125},
+    {740, 125},
+    {831, 125},
+    {740, 125},
+    {659, 125},
+    {740, 125},
+    {831, 125},
+    {831, 750}};
 static const int melody2_len = sizeof(melody2) / sizeof(melody2[0]);
-// Melody 3: Ode to Joy (Beethoven)
-static const Note melody3[] = {{330, 250}, {330, 250}, {349, 250}, {392, 250},
-                               {392, 250}, {349, 250}, {330, 250}, {294, 250}};
+// Melody 3: dididididi
+static const Note melody3[] = {{600, 125}, {0, 125}};
 static const int melody3_len = sizeof(melody3) / sizeof(melody3[0]);
 // Melody 4: Canon in D (fragment)
 static const Note melody4[] = {{523, 300}, {494, 300}, {440, 300}, {392, 300},
                                {440, 300}, {494, 300}, {523, 600}};
 static const int melody4_len = sizeof(melody4) / sizeof(melody4[0]);
-// Melody 5: Happy Birthday (fragment)
-static const Note melody5[] = {{392, 200}, {392, 200}, {440, 400},
-                               {392, 400}, {523, 400}, {494, 800}};
+// Melody 5: "Kong Xin Ren Zha Ji" (excerpt)
+// 1=C, 4/4, 145bpm (quarter note approx 414ms)
+static const Note melody5[] = {
+    // Bar 1-2
+    {220, 414},
+    {262, 414},
+    {349, 207},
+    {330, 207},
+    {294, 207},
+    {262, 207},
+    // Bar 3-4
+    {220, 207},
+    {262, 414},
+    {196, 414},
+    {220, 414},
+    {196, 414},
+    {220, 414},
+    {262, 207},
+    {220, 207},
+    {262, 414}};
 static const int melody5_len = sizeof(melody5) / sizeof(melody5[0]);
 
 static const Note *melodies[] = {melody1, melody2, melody3, melody4, melody5};
 static const int melody_lens[] = {melody1_len, melody2_len, melody3_len,
                                   melody4_len, melody5_len};
 
-// play melody using tone() if available on this board
+// play melody using LEDC PWM (no Arduino tone API)
 static void playMelody(int toneIdx) {
   if (toneIdx < 1 || toneIdx > 5)
     toneIdx = 1;
   const Note *m = melodies[toneIdx - 1];
   int len = melody_lens[toneIdx - 1];
-  for (int r = 0; r < 3 && alarmRinging; r++) { // repeat 3 times or until stopped
+  for (int r = 0; r < 3 && alarmRinging;
+       r++) { // repeat 3 times or until stopped
     for (int i = 0; i < len && alarmRinging; i++) {
       int f = m[i].freq;
       int d = m[i].dur;
 #ifdef BUZZER_PIN
-      // use Arduino tone API without duration so hardware plays continuously
-      tone(BUZZER_PIN, f);
+      // use LEDC PWM to generate tone without Arduino tone API
+      startBuzzerFreq(f);
       // poll button state in small slices while letting hardware play the
       // note uninterrupted
-      const unsigned long slice = 40; // ms
+      const unsigned long slice = 20; // ms, shorter for better button response
       unsigned long waited = 0;
       while (waited < (unsigned long)d && alarmRinging) {
         delay(slice);
@@ -68,7 +159,7 @@ static void playMelody(int toneIdx) {
         }
       }
       // stop the note cleanly
-      noTone(BUZZER_PIN);
+      stopBuzzer();
       // short gap between notes, still checking buttons
       if (alarmRinging) {
         unsigned long gapWait = 0;
@@ -97,14 +188,20 @@ static void playMelody(int toneIdx) {
       }
     }
   }
+  // ensure buzzer is stopped when leaving melody playback loop
+  stopBuzzer();
 }
 
 void startAlarmNow(int idx) {
   if (idx < 0 || idx > 4)
     return;
+  // ensure buzzer not left on
+  stopBuzzer();
   Alarm a = getAlarmCfg(idx);
-  if (!a.enabled)
+  if (!a.enabled) {
+    stopBuzzer();
     return;
+  }
   // set ringing state
   activeAlarmIdx = idx;
   alarmRinging = true;
@@ -151,10 +248,8 @@ void startAlarmNow(int idx) {
     }
     delay(50);
   }
-  // stop any tone
-#ifdef BUZZER_PIN
-  noTone(BUZZER_PIN);
-#endif
+  // ensure buzzer stopped
+  stopBuzzer();
   // restore previous page via full refresh
   gPageMgr.switchPage(savedPage);
   gPageMgr.requestRender(true);

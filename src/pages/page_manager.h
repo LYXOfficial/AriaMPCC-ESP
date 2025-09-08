@@ -39,6 +39,8 @@ private:
   int pendingFullRefreshPage = -1;
   // unsigned long lastPageSwitchMs; // Keep as a private member only, remove
   // initializer
-  unsigned long deferredFullDelay = 1000;
+  // Time (ms) to wait after a quick partial page switch before performing a
+  // deferred full refresh. Reduced from 1000 to 500 to shorten perceived delay.
+  unsigned long deferredFullDelay = 500;
   unsigned long inactivityTimeout = 30 * 1000;
 };

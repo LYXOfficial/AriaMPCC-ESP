@@ -71,7 +71,7 @@ String getHitokoto() {
 
 // ---- Button raw read / debounce globals ----
 unsigned long lastButtonPress = 0;
-const unsigned long debounceDelay = 100; // ms
+const unsigned long debounceDelay = 50; // ms (reduced from 100 to improve responsiveness)
 
 int readButtonStateRaw() {
   int v = analogRead(BTN_ADC_PIN);
