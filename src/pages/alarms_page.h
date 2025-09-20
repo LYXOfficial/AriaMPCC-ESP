@@ -28,6 +28,6 @@ private:
   void load();
   void save();
 };
-
+  
 // Public accessor for other modules
 Alarm getAlarmCfg(int idx);

@@ -25,10 +25,20 @@ void switchPageAndFullRefresh(int page) {
 }
 
 PageManager::PageManager() {}
+ 
+// initialize default directSwitchAllowed in a separate init step to avoid
+// depending on totalPages at construction time
+// (we assume pages are set immediately after construction via setPages)
+
 
 void PageManager::setPages(Page **pagesIn, int count) {
   pages = pagesIn;
   totalPages = count;
+  // initialize directSwitchAllowed defaults: allow all pages except 5 and 6
+  for (int i = 0; i < MAX_PAGES; ++i) directSwitchAllowed[i] = true;
+  // if configured pages fewer than indexes 5/6, ignore
+  if (totalPages > 5) directSwitchAllowed[5] = false; // music page
+  if (totalPages > 6) directSwitchAllowed[6] = false; // ebook page
 }
 
 void PageManager::begin() {
@@ -50,6 +60,14 @@ void PageManager::switchPage(int page) {
     page = (page % totalPages + totalPages) % totalPages;
   if (page >= totalPages)
     page = page % totalPages;
+
+  // if the target page is marked as not directly reachable, ignore the
+  // request. This prevents normal left/right swipes from landing on pages
+  // intended to be entered only via explicit actions (e.g., files open).
+  if (page >= 0 && page < MAX_PAGES && !directSwitchAllowed[page]) {
+    Serial.println("PageManager.switchPage: direct switch to page " + String(page) + " blocked");
+    return;
+  }
 
   currentPage = page;
   lastInteraction = millis();
@@ -73,6 +91,16 @@ void PageManager::requestRender(bool full) {
   if (!pages || totalPages == 0)
     return;
   pages[currentPage]->render(full);
+}
+
+void PageManager::setDirectSwitchAllowed(int page, bool allowed) {
+  if (page < 0 || page >= MAX_PAGES) return;
+  directSwitchAllowed[page] = allowed;
+}
+
+bool PageManager::isDirectSwitchAllowed(int page) const {
+  if (page < 0 || page >= MAX_PAGES) return false;
+  return directSwitchAllowed[page];
 }
 
 void PageManager::handleButtonEdge(PageButton bs) {

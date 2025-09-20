@@ -1,4 +1,6 @@
-#include "Audio.h"
+#define USE_LEGACY_I2S 1
+#include "AudioTools.h"
+#include "MP3DecoderHelix.h"
 #include "defines/RightImage.h"
 #include "defines/pinconf.h"
 #include <Arduino.h>
@@ -18,17 +20,19 @@
 GxEPD2_BW<GxEPD2_213_B72, GxEPD2_213_B72::HEIGHT>
     display(GxEPD2_213_B72(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 
-Audio audio;
+// Audio objects are managed by MusicPage to avoid global init in main
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 #include "app_context.h"
 #include "pages/alarms_page.h"
 #include "pages/calendar_page.h"
 #include "pages/files_page.h"
 #include "pages/ebook_page.h"
+#include "pages/music_page.h"
 #include "pages/page_manager.h"
 #include "pages/time_page.h"
 #include "utils/lunar.h"
 #include "utils/utils.h"
+#include "battery.h"
 
 // NTP 相关
 WiFiUDP ntpUDP;
@@ -198,7 +202,7 @@ void setup() {
   gPages[2] = new AlarmsPage();
   // Page 3: Files browser
   gPages[3] = new FilesPage();
-  // Placeholder pages 4..5
+  // Placeholder page 4
   class Placeholder : public Page {
   public:
     int index;
@@ -210,8 +214,9 @@ void setup() {
     const char *name() const override { return "placeholder"; }
   };
   gPages[4] = new Placeholder(4);
-  gPages[5] = new Placeholder(5);
-  // EBook page at index 6
+  // Page 5: Music player (entered only via Files open)
+  gPages[5] = new MusicPage();
+  // EBook page at index 6 (entered only via Files open)
   gPages[6] = new EBookPage();
   gPageMgr.setPages(gPages, 7);
   gPageMgr.begin();
@@ -233,9 +238,12 @@ void setup() {
       ((FilesPage *)p3)->refreshEntries();
     }
   }
-  audio.setPinout(I2S_BCLK_PIN, I2S_WS_PIN, I2S_DOUT_PIN);
-  audio.setI2SCommFMT_LSB(true);
-  audio.setVolume(255);
+  
+  // Audio initialization is performed by MusicPage when needed
+
+  // 初始化电池监测（ADC 引脚与分压系数可在需要时调整）
+  // 这里假设电压分压为 (Rtop=100k, Rbottom=200k) -> dividerFactor = (Rtop+Rbottom)/Rbottom = 1.5
+  gBattery.begin(BAT_ADC_PIN, 3.3f, 4095, 1.5f);
 }
 
 bool openEbookFromPath(const String &path) {
@@ -268,10 +276,41 @@ bool openEbookFromPath(const String &path) {
     do { display.fillScreen(GxEPD_WHITE); } while (display.nextPage());
   }
   if (ok) {
+    // allow direct switch to ebook page for this explicit open action
+    gPageMgr.setDirectSwitchAllowed(6, true);
     switchPageAndFullRefresh(6);
+    // then disallow direct switching again to prevent accidental entry
+    gPageMgr.setDirectSwitchAllowed(6, false);
     return true;
   }
   return false;
+}
+
+bool openMusicFromPath(const String &path) {
+  Page *p5 = gPages[5];
+  if (!p5) return false;
+  MusicPage *mp = (MusicPage *)p5;
+  // show a small loading prompt
+  int px = 20;
+  int py = 30;
+  int pw = display.width() - 80;
+  int ph = 28;
+  display.setPartialWindow(px, py, pw, ph);
+  display.firstPage();
+  do {
+    display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+    display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+    u8g2Fonts.setForegroundColor(GxEPD_BLACK);
+    u8g2Fonts.setCursor(px + 10, py + 18);
+    u8g2Fonts.print("加载中...");
+  } while (display.nextPage());
+
+  mp->openFromFile(path);
+  gPageMgr.setDirectSwitchAllowed(5, true);
+  switchPageAndFullRefresh(5);
+  gPageMgr.setDirectSwitchAllowed(5, false);
+  return true;
 }
 
 void loop() {
@@ -451,6 +490,11 @@ void loop() {
     }
   }
 
-  audio.loop();
+  // Audio processing: forward to MusicPage if present
+  Page *p5 = gPages[5];
+  if (p5) {
+    MusicPage *mp = (MusicPage *)p5;
+    mp->tick();
+  }
   vTaskDelay(10);
 }

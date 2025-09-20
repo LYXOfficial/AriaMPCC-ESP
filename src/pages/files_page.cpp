@@ -1,7 +1,6 @@
 #include "files_page.h"
 #include "../app_context.h"
 #include "../utils/utils.h"
-#include "Audio.h"
 #include "defines/pinconf.h"
 #include "ebook_page.h"
 #include "page_manager.h"
@@ -588,12 +587,22 @@ void FilesPage::openSelected() {
       render(true);
       return;
     }
-    // For other supported types, just show filename for now
+    // For audio files, open in music player page
+    String apath;
+    if (currentDir == "/")
+      apath = String("/") + fname;
+    else
+      apath = currentDir + String("/") + fname;
+    extern bool openMusicFromPath(const String &path);
+    if (openMusicFromPath(apath)) {
+      lastInteraction = millis();
+      return;
+    }
+    // fallback: show filename if music page open failed
     display.setFullWindow();
     display.firstPage();
     do {
       display.fillScreen(GxEPD_WHITE);
-      // ensure font and foreground set for file name display
       u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
       u8g2Fonts.setForegroundColor(GxEPD_BLACK);
       u8g2Fonts.setCursor(10, display.height() / 2 - 6);

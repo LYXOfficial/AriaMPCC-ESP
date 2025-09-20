@@ -1,5 +1,6 @@
 #include "time_page.h"
 #include "app_context.h"
+#include "battery.h"
 #include "defines/RightImage.h"
 #include "pages/page_manager.h"
 #include "utils/utils.h"
@@ -133,6 +134,14 @@ void HomeTimePage::renderFull() {
   }
 
   refreshInProgress = true;
+  // sample battery once before the paged drawing loop to avoid repeated
+  // ADC reads and multiple filter updates caused by display.nextPage().
+  gBattery.update();
+  int battPct = gBattery.percent();
+  Serial.println("Battery: " + String(battPct) + "% " +
+           String(gBattery.voltage()) + "V");
+  String pct = String(battPct) + "%";
+
   display.setFullWindow();
   display.firstPage();
   do {
@@ -182,6 +191,23 @@ void HomeTimePage::renderFull() {
     int hitokotoY = dividerY + 15;
     u8g2Fonts.setCursor(hitokotoX, hitokotoY);
     u8g2Fonts.print(fitted);
+
+    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+    int textW = u8g2Fonts.getUTF8Width(pct.c_str());
+    int px = display.width() - 56 - textW;
+    int py = 20;
+    u8g2Fonts.setCursor(px, py + 10);
+    u8g2Fonts.print(pct);
+    int bx = px - 26;
+    int by = py + 2;
+    int bw = 15;
+    int bh = 8;
+    display.drawRect(bx, by, bw, bh, GxEPD_BLACK);
+    display.fillRect(bx + bw, by + 1, 1, bh - 2, GxEPD_BLACK);
+    int fillW = (int)((bw - 2) * (battPct / 100.0f));
+    if (fillW > 0)
+      display.fillRect(bx + 1, by + 1, fillW, bh - 2, GxEPD_BLACK);
+  // no charging indicator (software detection removed)
   } while (display.nextPage());
 
   lastFullRefresh = millis();
@@ -210,6 +236,18 @@ void HomeTimePage::renderPartial() {
   if (currentTime == lastDisplayedTime && currentDate == lastDisplayedDate)
     return;
 
+  // 如果达到全刷间隔并且当前没有正在刷新，强制执行一次全刷
+  if (!refreshInProgress && (millis() - lastFullRefresh >= fullRefreshInterval)) {
+    Serial.println("HomeTimePage: fullRefreshInterval reached, forcing full refresh");
+    // 清空缓存时间以保证 renderPartial 不会提前返回
+    lastDisplayedTime = "";
+    // 发起一次全刷请求
+    gPageMgr.requestRender(true);
+    // 更新 lastFullRefresh 以避免连续触发（最终 renderFull 会再次设置 lastFullRefresh）
+    lastFullRefresh = millis();
+    return; // avoid doing partial render now
+  }
+
   String oneLine = currentHitokoto;
   oneLine.replace('\n', ' ');
   oneLine.trim();
@@ -232,6 +270,13 @@ void HomeTimePage::renderPartial() {
     if (timeAreaY + timeAreaH > display.height())
       timeAreaH = display.height() - timeAreaY;
   }
+
+  // sample battery once before the paged drawing loop
+  gBattery.update();
+  int battPct = gBattery.percent();
+  Serial.println("Battery: " + String(battPct) + "% " +
+           String(gBattery.voltage()) + "V");
+  String pct = String(battPct) + "%";
 
   display.setPartialWindow(timeAreaX, timeAreaY, timeAreaW, timeAreaH);
   display.firstPage();
@@ -279,6 +324,23 @@ void HomeTimePage::renderPartial() {
     int hitokotoY = dividerY + 15;
     u8g2Fonts.setCursor(hitokotoX, hitokotoY);
     u8g2Fonts.print(fitted);
+
+    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+    int textW = u8g2Fonts.getUTF8Width(pct.c_str());
+    int px = display.width() - 56 - textW;
+    int py = 20;
+    u8g2Fonts.setCursor(px, py + 10);
+    u8g2Fonts.print(pct);
+    int bx = px - 26;
+    int by = py + 2;
+    int bw = 15;
+    int bh = 8;
+    display.drawRect(bx, by, bw, bh, GxEPD_BLACK);
+    display.fillRect(bx + bw, by + 1, 1, bh - 2, GxEPD_BLACK);
+    int fillW = (int)((bw - 2) * (battPct / 100.0f));
+    if (fillW > 0)
+      display.fillRect(bx + 1, by + 1, fillW, bh - 2, GxEPD_BLACK);
+  // no charging indicator (software detection removed)
   } while (display.nextPage());
 
   lastDisplayedTime = currentTime;

@@ -28,6 +28,8 @@ public:
   unsigned long getDeferredFullDelay() const { return deferredFullDelay; }
   void cancelPendingFull() { pendingFullRefreshPage = -1; }
   int pendingPage() const { return pendingFullRefreshPage; }
+  void setDirectSwitchAllowed(int page, bool allowed);
+  bool isDirectSwitchAllowed(int page) const;
 
 private:
   Page **pages = nullptr;
@@ -43,4 +45,9 @@ private:
   // deferred full refresh. Reduced from 1000 to 500 to shorten perceived delay.
   unsigned long deferredFullDelay = 500;
   unsigned long inactivityTimeout = 30 * 1000;
+  // control whether a page can be reached by normal left/right page switching.
+  // Some pages (music/ebook) should only be entered through explicit actions
+  // (e.g., opening a file). Defaults set in constructor.
+  static const int MAX_PAGES = 12;
+  bool directSwitchAllowed[MAX_PAGES];
 };
