@@ -85,6 +85,9 @@ unsigned long lastPageSwitchMs = 0;
 
 void setup() {
   Serial.begin(9600);
+  // If resumed from deep sleep, print wakeup cause for debugging
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  Serial.println("Wakeup cause: " + String((int)cause));
   // ensure buzzer pin is in defined state to avoid idle noise
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);

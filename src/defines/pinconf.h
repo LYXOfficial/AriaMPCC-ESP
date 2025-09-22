@@ -18,6 +18,9 @@
 
 #define BAT_ADC_PIN 2
 
+// default wake pin for deep-sleep wakeup (override if your button uses a different pin)
+#define WAKE_BUTTON_PIN BTN_ADC_PIN
+
 #define I2S_DOUT_PIN 3
 #define I2S_BCLK_PIN 10
 #define I2S_WS_PIN 9

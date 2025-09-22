@@ -1,6 +1,7 @@
 #include "time_page.h"
 #include "app_context.h"
 #include "battery.h"
+#include "power.h"
 #include "defines/RightImage.h"
 #include "pages/page_manager.h"
 #include "utils/utils.h"
@@ -140,6 +141,24 @@ void HomeTimePage::renderFull() {
   int battPct = gBattery.percent();
   Serial.println("Battery: " + String(battPct) + "% " +
            String(gBattery.voltage()) + "V");
+  // if battery critically low -> show overlay and deep sleep until user wakes
+  if (battPct <= 2) {
+    display.setFullWindow();
+    display.firstPage();
+    do {
+      display.fillScreen(GxEPD_WHITE);
+      u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+      String msg = "电量不足，已休眠。请按键唤醒";
+      int w = u8g2Fonts.getUTF8Width(msg.c_str());
+      int x = (display.width() - w) / 2;
+      int y = display.height() / 2;
+      u8g2Fonts.setCursor(x, y);
+      u8g2Fonts.print(msg);
+    } while (display.nextPage());
+    // give time for message to be visible (longer to aid debugging)
+    delay(2000);
+    enterDeepSleepUntilWakePin(WAKE_BUTTON_PIN);
+  }
   String pct = String(battPct) + "%";
 
   display.setFullWindow();
