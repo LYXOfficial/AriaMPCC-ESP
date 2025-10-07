@@ -94,43 +94,45 @@ void AlarmsPage::render(bool full) {
     refreshInProgress = false;
 }
 
-void AlarmsPage::onRight() {
+bool AlarmsPage::onRight() {
   if (highlightedRow < 0) {
     switchPageAndFullRefresh(currentPage + 1);
-    return;
+    return true;
   }
   if (fieldCursor < 0) {
     fieldCursor = ALARM_FIELD_HOUR;
     render(false);
     lastInteraction = millis();
-    return;
+    return true;
   }
   fieldCursor++;
   if (fieldCursor > ALARM_FIELD_ENABLED)
     fieldCursor = -1;
   render(false);
   lastInteraction = millis();
+  return true;
 }
 
-void AlarmsPage::onLeft() {
+bool AlarmsPage::onLeft() {
   if (highlightedRow < 0) {
     switchPageAndFullRefresh(currentPage - 1);
-    return;
+    return true;
   }
   if (fieldCursor < 0) {
     fieldCursor = ALARM_FIELD_ENABLED;
     render(false);
     lastInteraction = millis();
-    return;
+    return true;
   }
   fieldCursor--;
   if (fieldCursor < ALARM_FIELD_HOUR)
     fieldCursor = -1;
   render(false);
   lastInteraction = millis();
+  return true;
 }
 
-void AlarmsPage::onCenter() {
+bool AlarmsPage::onCenter() {
   if (highlightedRow < 0) {
     int old = highlightedRow;
     highlightedRow = 0;
@@ -141,7 +143,7 @@ void AlarmsPage::onCenter() {
     }
     render(false);
     lastInteraction = millis();
-    return;
+    return true;
   }
   if (fieldCursor < 0) {
     int oldRow = highlightedRow;
@@ -158,7 +160,7 @@ void AlarmsPage::onCenter() {
     }
     render(false);
     lastInteraction = millis();
-    return;
+    return true;
   }
   Alarm &a = s_alarms[highlightedRow];
   if (fieldCursor == ALARM_FIELD_HOUR)
@@ -177,6 +179,7 @@ void AlarmsPage::onCenter() {
   save();
   render(false);
   lastInteraction = millis();
+  return true;
 }
 
 void AlarmsPage::drawRow(int rowIndex, int x, int y, int rowW, int rowH,

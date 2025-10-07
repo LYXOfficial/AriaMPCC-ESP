@@ -218,7 +218,7 @@ void CalendarPage::render(bool full) {
     refreshInProgress = false;
 }
 
-void CalendarPage::onRight() {
+bool CalendarPage::onRight() {
   if (currentCursor == CURSOR_NAVIGATE) {
     int next = currentPage + 1; // wrapping handled by switchPageAndFullRefresh
     switchPageAndFullRefresh(next);
@@ -249,9 +249,10 @@ void CalendarPage::onRight() {
     }
     render(false);
   }
+  return true;
 }
 
-void CalendarPage::onLeft() {
+bool CalendarPage::onLeft() {
   if (currentCursor == CURSOR_NAVIGATE) {
     int prev = currentPage - 1; // wrapping handled by switchPageAndFullRefresh
     switchPageAndFullRefresh(prev);
@@ -281,9 +282,11 @@ void CalendarPage::onLeft() {
     }
     render(false);
   }
+  return true;
 }
 
-void CalendarPage::onCenter() {
+bool CalendarPage::onCenter() {
   currentCursor = static_cast<Cursor>((currentCursor + 1) % 4);
   render(false);
+  return true;
 }

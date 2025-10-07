@@ -14,9 +14,9 @@ class MusicPage : public Page {
 public:
   MusicPage();
   void render(bool full) override;
-  void onLeft() override;
-  void onRight() override;
-  void onCenter() override;
+  bool onLeft() override;
+  bool onRight() override;
+  bool onCenter() override;
   const char *name() const override { return "music"; }
   void openFromFile(const String &path);
   // called periodically from the main loop to advance playback

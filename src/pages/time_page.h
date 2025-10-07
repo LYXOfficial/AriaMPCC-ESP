@@ -7,9 +7,9 @@ public:
   using SwitchPageFn = std::function<void(int)>;
   HomeTimePage(SwitchPageFn switcher);
   void render(bool full) override;
-  void onLeft() override;
-  void onRight() override;
-  void onCenter() override;
+  bool onLeft() override;
+  bool onRight() override;
+  bool onCenter() override;
   const char *name() const override { return "home"; }
 
 private:

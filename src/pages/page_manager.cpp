@@ -112,9 +112,9 @@ void PageManager::handleButtonEdge(PageButton bs) {
   // switchPage...).
   int prevPage = currentPage;
   if (bs == BTN_LEFT) {
-    pages[currentPage]->onLeft();
+    bool handled = pages[currentPage]->onLeft();
     // If page didn't handle switching, perform default circular left move
-    if (currentPage == prevPage) {
+    if (!handled && currentPage == prevPage) {
       // find previous allowed page (skip pages with directSwitchAllowed == false)
       if (totalPages > 1) {
         int found = -1;
@@ -130,9 +130,9 @@ void PageManager::handleButtonEdge(PageButton bs) {
       }
     }
   } else if (bs == BTN_RIGHT) {
-    pages[currentPage]->onRight();
+    bool handled = pages[currentPage]->onRight();
     // If page didn't handle switching, perform default circular right move
-    if (currentPage == prevPage) {
+    if (!handled && currentPage == prevPage) {
       // find next allowed page (skip pages with directSwitchAllowed == false)
       if (totalPages > 1) {
         int found = -1;

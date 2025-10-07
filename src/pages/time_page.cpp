@@ -138,40 +138,24 @@ void HomeTimePage::render(bool full) {
   }
 }
 
-void HomeTimePage::onLeft() {
-  if (switchPage)
+bool HomeTimePage::onLeft() {
+  if (switchPage) {
     switchPage(currentPage - 1);
+    return true;
+  }
+  return false;
 }
 
-void HomeTimePage::onRight() {
-  if (switchPage)
+bool HomeTimePage::onRight() {
+  if (switchPage) {
     switchPage(currentPage + 1);
+    return true;
+  }
+  return false;
 }
 
-void HomeTimePage::onCenter() {
-  const String msg = "刷新信息中...";
-  u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-  int textW = u8g2Fonts.getUTF8Width(msg.c_str());
-  const int padX = 8;
-  const int padY = 6;
-  int pw = textW + padX * 2;
-  int ph = 12 + padY * 2;
-  if (pw > display.width())
-    pw = display.width();
-  if (ph > display.height())
-    ph = display.height();
-  int px = (display.width() - pw) / 2 - 20;
-  int py = 30;
-  display.setPartialWindow(px, py, pw, ph);
-  display.firstPage();
-  do {
-    display.fillRect(px, py, pw, ph, GxEPD_WHITE);
-    display.drawRect(px, py, pw, ph, GxEPD_BLACK);
-    int tx = px + (pw - textW) / 2;
-    int ty = py + padY + 12;
-    u8g2Fonts.setCursor(tx, ty);
-    u8g2Fonts.print(msg);
-  } while (display.nextPage());
+bool HomeTimePage::onCenter() {
+  return false;
 }
 
 void HomeTimePage::renderFull() {

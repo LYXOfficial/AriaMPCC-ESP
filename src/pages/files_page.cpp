@@ -293,7 +293,7 @@ void FilesPage::render(bool full) {
   } while (display.nextPage());
 }
 
-void FilesPage::onLeft() {
+bool FilesPage::onLeft() {
   // poll SD state first
   pollSd();
   // New behavior: left should navigate up (to parent directory) when an
@@ -310,7 +310,7 @@ void FilesPage::onLeft() {
       selectionActive = false;
       render(false); // partial refresh to update list/footer quickly
       lastInteraction = millis();
-      return;
+      return true;
     }
     // navigate up one directory
     if (currentDir != "/") {
@@ -345,33 +345,35 @@ void FilesPage::onLeft() {
       }
       render(true);
       lastInteraction = millis();
-      return;
+      return true;
     }
   }
   // no highlight -> switch to previous app page
   switchPageAndFullRefresh(currentPage - 1);
+  return true;
 }
 
-void FilesPage::onRight() {
+bool FilesPage::onRight() {
   // poll SD state first
   pollSd();
   // If selection active, right opens (confirm). If not active, right switches
   // page.
   if (selectionActive) {
     openSelected();
-    return;
+    return true;
   }
   // if there's a highlighted row, treat right as open (user intends to open
   // entry)
   if (sdAvailable && totalEntries > 0 && highlightedRow >= 0) {
     openSelected();
-    return;
+    return true;
   }
   // selection not active and no highlighted entry -> right means next app page
   switchPageAndFullRefresh(currentPage + 1);
+  return true;
 }
 
-void FilesPage::onCenter() {
+bool FilesPage::onCenter() {
   // poll SD state first
   pollSd();
   // If no SD or no entries, center toggles nothing
@@ -379,7 +381,7 @@ void FilesPage::onCenter() {
     // do a small flash
     render(true);
     lastInteraction = millis();
-    return;
+    return true;
   }
   unsigned long now = millis();
   // If already in selection mode, center is a no-op (could be changed later)
@@ -387,7 +389,7 @@ void FilesPage::onCenter() {
     render(false);
     lastInteraction = now;
     lastCenterTapMs = now;
-    return;
+    return true;
   }
 
   // Double-tap center to enter selection mode. Single tap cycles highlighted
@@ -401,7 +403,7 @@ void FilesPage::onCenter() {
     render(false);
     lastInteraction = now;
     lastCenterTapMs = 0;
-    return;
+    return true;
   }
 
   // single tap -> advance highlightedRow (cycle through entries visible and
@@ -432,6 +434,7 @@ void FilesPage::onCenter() {
   render(false);
   lastInteraction = now;
   lastCenterTapMs = now;
+  return true;
 }
 
 void FilesPage::openSelected() {
@@ -617,4 +620,5 @@ void FilesPage::openSelected() {
     render(false);
   }
   lastInteraction = millis();
+  return;
 }

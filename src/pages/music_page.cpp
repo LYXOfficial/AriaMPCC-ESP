@@ -113,13 +113,15 @@ void MusicPage::render(bool full) {
   } while (display.nextPage());
 }
 
-void MusicPage::onLeft() {
+bool MusicPage::onLeft() {
   // left: previous track (not implemented)
+  return false;
 }
-void MusicPage::onRight() {
+bool MusicPage::onRight() {
   // right: next track (not implemented)
+  return false;
 }
-void MusicPage::onCenter() {
+bool MusicPage::onCenter() {
   if (player) {
     if (player->isActive()) player->setActive(false);
     else player->setActive(true);
@@ -128,6 +130,7 @@ void MusicPage::onCenter() {
     playing = !playing;
   }
   render(false);
+  return true;
 }
 
 void MusicPage::tick() {

@@ -7,9 +7,9 @@ class EBookPage : public Page {
 public:
   EBookPage();
   void render(bool full) override;
-  void onLeft() override;
-  void onRight() override;
-  void onCenter() override;
+  bool onLeft() override;
+  bool onRight() override;
+  bool onCenter() override;
   const char *name() const override { return "ebook"; }
 
   // open a text file from SD by absolute path and paginate it

@@ -530,12 +530,12 @@ void EBookPage::exitToFiles() {
   hasFile = false;
 }
 
-void EBookPage::onLeft() {
+bool EBookPage::onLeft() {
   // left = previous page (natural mapping)
-  if (!hasFile) { switchPageAndFullRefresh(currentPage - 1); return; }
+  if (!hasFile) { switchPageAndFullRefresh(currentPage - 1); return true; }
   if (promptVisible) {
     // if prompt visible, ignore
-    return;
+    return false;
   }
   if (pageIndex > 0) {
     pageIndex--;
@@ -549,14 +549,15 @@ void EBookPage::onLeft() {
     render(true);
     lastInteraction = millis();
   }
+  return true;
 }
 
-void EBookPage::onRight() {
+bool EBookPage::onRight() {
   // right = next page (natural mapping)
-  if (!hasFile) { switchPageAndFullRefresh(currentPage + 1); return; }
+  if (!hasFile) { switchPageAndFullRefresh(currentPage + 1); return true; }
   if (promptVisible) {
     // if prompt visible, ignore
-    return;
+    return false;
   }
   // ensure next page offset is available (compute lazily)
   ensurePageIndexUpTo(pageIndex + 1);
@@ -573,10 +574,11 @@ void EBookPage::onRight() {
   }
   // precompute next pages asynchronously
   startPrecomputeAsync(pageIndex);
+  return true;
 }
 
-void EBookPage::onCenter() {
-  if (!hasFile) return;
+bool EBookPage::onCenter() {
+  if (!hasFile) return false;
   // show prompt as partial overlay when tapped
   unsigned long t0 = millis();
   promptVisible = true;
@@ -592,7 +594,7 @@ void EBookPage::onCenter() {
       promptVisible = false;
       hidePromptFull();
       lastInteraction = millis();
-      return;
+      return false;
     }
     vTaskDelay(20);
   }
@@ -600,4 +602,5 @@ void EBookPage::onCenter() {
   // held for required duration -> exit to files
   promptVisible = false;
   exitToFiles();
+  return true;
 }

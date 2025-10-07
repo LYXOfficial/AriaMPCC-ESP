@@ -212,9 +212,9 @@ void setup() {
     int index;
     explicit Placeholder(int idx) : index(idx) {}
     void render(bool full) override { renderPlaceholderPartial(index); }
-    void onLeft() override { switchPageAndFullRefresh(index - 1); }
-    void onRight() override { switchPageAndFullRefresh(index + 1); }
-    void onCenter() override {}
+    bool onLeft() override { switchPageAndFullRefresh(index - 1); return true; }
+    bool onRight() override { switchPageAndFullRefresh(index + 1); return true; }
+    bool onCenter() override { return false; }
     const char *name() const override { return "placeholder"; }
   };
   gPages[4] = new Placeholder(4);
