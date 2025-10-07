@@ -110,10 +110,42 @@ void PageManager::handleButtonEdge(PageButton bs) {
   // Always dispatch the button event to the current page. Pages decide whether
   // to handle it locally or perform page switching (they can call
   // switchPage...).
+  int prevPage = currentPage;
   if (bs == BTN_LEFT) {
     pages[currentPage]->onLeft();
+    // If page didn't handle switching, perform default circular left move
+    if (currentPage == prevPage) {
+      // find previous allowed page (skip pages with directSwitchAllowed == false)
+      if (totalPages > 1) {
+        int found = -1;
+        for (int i = 1; i < totalPages; ++i) {
+          int cand = (prevPage - i) % totalPages;
+          if (cand < 0) cand += totalPages;
+          if (cand >= 0 && cand < totalPages && directSwitchAllowed[cand]) {
+            found = cand;
+            break;
+          }
+        }
+        if (found >= 0) switchPage(found);
+      }
+    }
   } else if (bs == BTN_RIGHT) {
     pages[currentPage]->onRight();
+    // If page didn't handle switching, perform default circular right move
+    if (currentPage == prevPage) {
+      // find next allowed page (skip pages with directSwitchAllowed == false)
+      if (totalPages > 1) {
+        int found = -1;
+        for (int i = 1; i < totalPages; ++i) {
+          int cand = (prevPage + i) % totalPages;
+          if (cand >= 0 && cand < totalPages && directSwitchAllowed[cand]) {
+            found = cand;
+            break;
+          }
+        }
+        if (found >= 0) switchPage(found);
+      }
+    }
   } else if (bs == BTN_CENTER) {
     pages[currentPage]->onCenter();
   }

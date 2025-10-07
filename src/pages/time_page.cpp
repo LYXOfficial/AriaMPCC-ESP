@@ -2,6 +2,8 @@
 #include "app_context.h"
 #include "battery.h"
 #include "power.h"
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #include "defines/RightImage.h"
 #include "pages/page_manager.h"
 #include "utils/utils.h"
@@ -13,16 +15,16 @@ String currentHitokoto = "";
 String lastDisplayedHitokoto = "";
 unsigned long lastFullRefresh = 0;
 unsigned long lastHitokotoUpdate = 0;
-const unsigned long fullRefreshInterval = 8UL * 60UL * 1000UL; // 8分钟全刷一次
+const unsigned long fullRefreshInterval = 30UL * 60UL * 1000UL; // 30分钟全刷一次
 const unsigned long hitokotoUpdateInterval =
-    5UL * 60UL * 1000UL; // 5分钟更新一次一言
+    8UL * 60UL * 60UL * 1000UL; // 8小时更新一次一言
 
 // Weather related
 String currentCity = "";
 String currentWeather = "";
 String currentTemp = "";
 unsigned long lastWeatherUpdate = 0;
-const unsigned long weatherUpdateInterval = 10UL * 60UL * 1000UL; // 10分钟
+const unsigned long weatherUpdateInterval = 12UL * 60UL * 60UL * 1000UL; // 12小时
 
 volatile bool refreshInProgress = false;
 
@@ -32,6 +34,97 @@ extern PageManager gPageMgr;
 String getHitokoto();
 
 HomeTimePage::HomeTimePage(SwitchPageFn switcher) : switchPage(switcher) {}
+
+// Local helper: enter light sleep and wake on the given pin (button).
+// This is local to the page to avoid changing power.h signatures.
+static void enterLightSleepUntilWakePinLocal(int wakePin, bool activeLow = true, uint32_t timeoutMs = 0) {
+  Serial.println("enterLightSleepUntilWakePinLocal: preparing pin " + String(wakePin));
+  if (activeLow) pinMode(wakePin, INPUT_PULLUP);
+  else pinMode(wakePin, INPUT_PULLDOWN);
+  delay(10);
+  int lvl = digitalRead(wakePin);
+  Serial.println("Wake pin level before light sleep: " + String(lvl));
+
+  // Put the e-paper display into low-power mode before sleeping to avoid
+  // panel driving voltages being kept while MCU sleeps.
+  Serial.println("Powering off e-paper before light sleep");
+  display.powerOff();
+  // small delay to ensure driver completed power-off sequence
+  delay(20);
+
+  // configure GPIO wake for light sleep
+  gpio_wakeup_enable((gpio_num_t)wakePin, activeLow ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+
+  if (timeoutMs > 0) {
+    Serial.println("Also arming timer wakeup in " + String(timeoutMs) + " ms as backup");
+    esp_sleep_enable_timer_wakeup((uint64_t)timeoutMs * 1000ULL);
+  }
+
+  Serial.println("Entering light sleep (will wake on button or timer)");
+  esp_light_sleep_start();
+  Serial.println("Woke from light sleep");
+
+  // Re-initialize the display for normal operation. Use initial=false to
+  // avoid forcing an initial full refresh when the panel power was kept.
+  Serial.println("Re-initializing e-paper after wake");
+  display.init(0, false);
+
+  // disable GPIO wake to return to normal operation
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+}
+
+// Compute ms until the next scheduled event that should wake the page:
+// - next minute boundary (time change)
+// - next full refresh interval
+// - next hitokoto update
+// - next weather update
+static uint32_t computeNextScheduledWakeMs() {
+  uint32_t now = millis();
+  uint32_t nextMs = UINT32_MAX;
+
+  // next minute boundary using timeClient
+  unsigned long epoch = timeClient.getEpochTime();
+  unsigned long sec = epoch % 60;
+  uint32_t msToNextMinute = (uint32_t)((60 - sec) * 1000UL);
+  if (msToNextMinute == 0) msToNextMinute = 1000;
+  nextMs = msToNextMinute;
+
+  // full refresh schedule
+  if (lastFullRefresh > 0) {
+    uint32_t since = now - lastFullRefresh;
+    if (since < fullRefreshInterval) {
+      uint32_t rem = (uint32_t)(fullRefreshInterval - since);
+      if (rem < nextMs) nextMs = rem;
+    } else {
+      // already due -> wake immediately (0 -> treat as 1000ms minimum)
+      nextMs = 1000;
+    }
+  }
+
+  // hitokoto
+  if (lastHitokotoUpdate > 0) {
+    uint32_t since = now - lastHitokotoUpdate;
+    if (since < hitokotoUpdateInterval) {
+      uint32_t rem = (uint32_t)(hitokotoUpdateInterval - since);
+      if (rem < nextMs) nextMs = rem;
+    }
+  }
+
+  // weather
+  if (lastWeatherUpdate > 0) {
+    uint32_t since = now - lastWeatherUpdate;
+    if (since < weatherUpdateInterval) {
+      uint32_t rem = (uint32_t)(weatherUpdateInterval - since);
+      if (rem < nextMs) nextMs = rem;
+    }
+  }
+
+  // enforce sensible bounds
+  if (nextMs == UINT32_MAX) nextMs = 1000;
+  if (nextMs < 500) nextMs = 500; // at least 0.5s
+  return nextMs;
+}
 
 void HomeTimePage::render(bool full) {
   // Minimal render: log page and requestedFull only. Other heuristics
@@ -67,7 +160,7 @@ void HomeTimePage::onCenter() {
     pw = display.width();
   if (ph > display.height())
     ph = display.height();
-  int px = (display.width() - pw) / 2;
+  int px = (display.width() - pw) / 2 - 20;
   int py = 30;
   display.setPartialWindow(px, py, pw, ph);
   display.firstPage();
@@ -141,22 +234,40 @@ void HomeTimePage::renderFull() {
   int battPct = gBattery.percent();
   Serial.println("Battery: " + String(battPct) + "% " +
            String(gBattery.voltage()) + "V");
-  // if battery critically low -> show overlay and deep sleep until user wakes
-  if (battPct <= 2) {
-    display.setFullWindow();
+  // if battery critically low -> show a partial overlay (box) on top of
+  // current UI, then hibernate e-paper and enter deep sleep until wake.
+  if (battPct <= 5) {
+    const String msg = "电量不足，已休眠。请按中键唤醒";
+    u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+    int textW = u8g2Fonts.getUTF8Width(msg.c_str());
+    const int padX = 8;
+    const int padY = 6;
+    int pw = textW + padX * 2;
+    int ph = 12 + padY * 2;
+    if (pw > display.width()) pw = display.width();
+    if (ph > display.height()) ph = display.height();
+    // user requested text x offset of -20
+    int px = (display.width() - pw) / 2 - 20;
+    if (px < 0) px = 0;
+    int py = (display.height() - ph) / 2;
+
+    // draw as partial window so current UI remains visible outside the box
+    display.setPartialWindow(px, py, pw, ph);
     display.firstPage();
     do {
-      display.fillScreen(GxEPD_WHITE);
-      u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-      String msg = "电量不足，已休眠。请按键唤醒";
-      int w = u8g2Fonts.getUTF8Width(msg.c_str());
-      int x = (display.width() - w) / 2;
-      int y = display.height() / 2;
-      u8g2Fonts.setCursor(x, y);
+      display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+      display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+      int tx = px + (pw - textW) / 2;
+      int ty = py + padY + 12;
+      u8g2Fonts.setCursor(tx, ty);
       u8g2Fonts.print(msg);
     } while (display.nextPage());
-    // give time for message to be visible (longer to aid debugging)
+
+    // show message briefly
     delay(2000);
+    Serial.println("Hibernating e-paper before deep sleep (partial overlay)");
+    display.hibernate();
+    delay(20);
     enterDeepSleepUntilWakePin(WAKE_BUTTON_PIN);
   }
   String pct = String(battPct) + "%";
@@ -234,6 +345,30 @@ void HomeTimePage::renderFull() {
   lastDisplayedDate = currentDate;
   lastDisplayedHitokoto = oneLine;
   refreshInProgress = false;
+  // If idle (no user action/refresh) immediately enter light sleep until
+  // either the wake button is pressed or the next scheduled event occurs.
+  if (!refreshInProgress) {
+    // Wait a short grace period (1.5s) before entering light sleep so
+    // accidental quick interactions don't immediately trigger sleep.
+    const uint32_t graceMs = 1500;
+    uint32_t start = millis();
+    uint32_t lastIntSnapshot = ::lastInteraction;
+    bool aborted = false;
+    while (millis() - start < graceMs) {
+      if (::lastInteraction != lastIntSnapshot || refreshInProgress) {
+        aborted = true;
+        break;
+      }
+      delay(50);
+    }
+    if (!aborted) {
+      uint32_t nextMs = computeNextScheduledWakeMs();
+      Serial.println("HomeTimePage::renderFull idle -> light sleep for " + String(nextMs) + " ms (after " + String(graceMs) + "ms grace)");
+      enterLightSleepUntilWakePinLocal(WAKE_BUTTON_PIN, true, nextMs);
+    } else {
+      Serial.println("HomeTimePage::renderFull: sleep aborted due to recent activity");
+    }
+  }
 }
 
 void HomeTimePage::renderPartial() {
@@ -364,4 +499,27 @@ void HomeTimePage::renderPartial() {
 
   lastDisplayedTime = currentTime;
   lastDisplayedDate = currentDate;
+  // If idle (no user action/refresh) immediately enter light sleep until
+  // either the wake button is pressed or the next scheduled event occurs.
+  if (!refreshInProgress) {
+    // grace period before entering light sleep
+    const uint32_t graceMs = 1500;
+    uint32_t start = millis();
+    uint32_t lastIntSnapshot = ::lastInteraction;
+    bool aborted = false;
+    while (millis() - start < graceMs) {
+      if (::lastInteraction != lastIntSnapshot || refreshInProgress) {
+        aborted = true;
+        break;
+      }
+      delay(50);
+    }
+    if (!aborted) {
+      uint32_t nextMs = computeNextScheduledWakeMs();
+      Serial.println("HomeTimePage::renderPartial idle -> light sleep for " + String(nextMs) + " ms (after " + String(graceMs) + "ms grace)");
+      enterLightSleepUntilWakePinLocal(WAKE_BUTTON_PIN, true, nextMs);
+    } else {
+      Serial.println("HomeTimePage::renderPartial: sleep aborted due to recent activity");
+    }
+  }
 }

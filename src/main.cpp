@@ -30,6 +30,7 @@ U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 #include "pages/music_page.h"
 #include "pages/page_manager.h"
 #include "pages/time_page.h"
+#include "power.h"
 #include "utils/lunar.h"
 #include "utils/utils.h"
 #include "battery.h"
@@ -322,6 +323,12 @@ void loop() {
   // keep per-alarm last triggered minute to avoid retriggering within same minute
   static int lastAlarmTriggerMinute[5] = {-1, -1, -1, -1, -1};
 
+  // 长按检测相关状态
+  static unsigned long centerPressStartTime = 0; // CENTER 按钮按下开始时间
+  static bool longPressTriggered = false; // 长按已触发标志，防止重复触发
+  const unsigned long LONG_PRESS_DURATION = 1000; // 长按阈值：1秒 (用于手动刷新)
+  const unsigned long DEEPSLEEP_LONG_PRESS = 5000; // 长按5秒进入深度睡眠
+
   // 读取按钮状态（拨杆）
   PageButton bs = (PageButton)readButtonStateRaw();
   // 如果当前处于全刷过程中，忽略按键输入
@@ -351,42 +358,75 @@ void loop() {
           pageSwitchCount++; // only count when actual page switch occurred
         }
       }
-      if (bs == BTN_CENTER) {
-        Serial.println("BTN_CENTER pressed, currentPage=" +
-                       String(currentPage));
-        if (currentPage == 0) {
-          Serial.println("On homepage, starting manual refresh");
-          // 在主页：局部显示获取信息中...（屏幕上方中央）
-          {
-            const String msg = "刷新信息中...";
-            u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
-            int textW = u8g2Fonts.getUTF8Width(msg.c_str());
-            // 水平内边距与垂直高度
-            const int padX = 8;
-            const int padY = 6;
-            int pw = textW + padX * 2;
-            int ph = 12 + padY * 2; // 字高约16，外加垂直内边距
-            if (pw > display.width())
-              pw = display.width();
-            if (ph > display.height())
-              ph = display.height();
-            int px = (display.width() - pw) / 2;
-            int py = 30; // 靠近顶部，保留少量顶部空白
+      // CENTER 按钮按下时记录起始时间
+      if (bs == BTN_CENTER && lastButtonState != BTN_CENTER) {
+        centerPressStartTime = now;
+        longPressTriggered = false;
+        Serial.println("BTN_CENTER pressed at " + String(now));
+      }
+      // CENTER 按钮松开时重置状态
+      if (bs != BTN_CENTER && lastButtonState == BTN_CENTER) {
+        Serial.println("BTN_CENTER released");
+        // calculate held duration and decide action on release
+        unsigned long held = 0;
+        if (centerPressStartTime > 0) held = now - centerPressStartTime;
+        // Prioritize 5s deep sleep when on homepage
+        if (currentPage == 0 && held >= DEEPSLEEP_LONG_PRESS) {
+          Serial.println("Release after >=5s on homepage -> entering deep sleep");
+          const String msg = "已休眠，按中键唤醒"; // 不包含“电量不足"
+          u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+          int textW = u8g2Fonts.getUTF8Width(msg.c_str());
+          const int padX = 8;
+          const int padY = 6;
+          int pw = textW + padX * 2;
+          int ph = 12 + padY * 2;
+          if (pw > display.width()) pw = display.width();
+          if (ph > display.height()) ph = display.height();
+          int px = (display.width() - pw) / 2 - 20;
+          if (px < 0) px = 0;
+          int py = (display.height() - ph) / 2;
 
-            // 使用紧凑的部分窗口以保证绘制对齐
-            display.setPartialWindow(px, py, pw, ph);
-            display.firstPage();
-            do {
-              // 先用白底清空部分区域，再画黑边框增加可见性
-              display.fillRect(px, py, pw, ph, GxEPD_WHITE);
-              display.drawRect(px, py, pw, ph, GxEPD_BLACK);
-              // 文字居中绘制
-              int tx = px + (pw - textW) / 2;
-              int ty = py + padY + 12; // 基线位置，12 为字体基线偏移经验值
-              u8g2Fonts.setCursor(tx, ty);
-              u8g2Fonts.print(msg);
-            } while (display.nextPage());
-          }
+          display.setPartialWindow(px, py, pw, ph);
+          display.firstPage();
+          do {
+            display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+            display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+            int tx = px + (pw - textW) / 2;
+            int ty = py + padY + 12;
+            u8g2Fonts.setCursor(tx, ty);
+            u8g2Fonts.print(msg);
+          } while (display.nextPage());
+
+          delay(1000);
+          Serial.println("Hibernating e-paper before deep sleep (release 5s)");
+          display.hibernate();
+          delay(20);
+          enterDeepSleepUntilWakePin(WAKE_BUTTON_PIN);
+        } else if (currentPage == 0 && held >= LONG_PRESS_DURATION) {
+          // treat as manual refresh when released after >=1s
+          Serial.println("Release after >=1s on homepage -> manual refresh");
+          const String msg = "刷新信息中...";
+          u8g2Fonts.setFont(u8g2_font_wqy12_t_gb2312);
+          int textW = u8g2Fonts.getUTF8Width(msg.c_str());
+          const int padX = 8;
+          const int padY = 6;
+          int pw = textW + padX * 2;
+          int ph = 12 + padY * 2; // 字高约16，外加垂直内边距
+          if (pw > display.width()) pw = display.width();
+          if (ph > display.height()) ph = display.height();
+          int px = (display.width() - pw) / 2;
+          int py = 30; // 靠近顶部，保留少量顶部空白
+
+          display.setPartialWindow(px, py, pw, ph);
+          display.firstPage();
+          do {
+            display.fillRect(px, py, pw, ph, GxEPD_WHITE);
+            display.drawRect(px, py, pw, ph, GxEPD_BLACK);
+            int tx = px + (pw - textW) / 2;
+            int ty = py + padY + 12; // 基线位置
+            u8g2Fonts.setCursor(tx, ty);
+            u8g2Fonts.print(msg);
+          } while (display.nextPage());
 
           // 执行网络获取（同步）
           Serial.println("Fetching hitokoto...");
@@ -417,23 +457,24 @@ void loop() {
               currentWeather = w;
               currentTemp = t;
               lastWeatherUpdate = millis();
-              Serial.println("Weather updated by manual fetch: " + currentCity +
-                             " " + currentTemp + "C " + currentWeather);
+              Serial.println("Weather updated by manual fetch: " + currentCity + " " + currentTemp + "C " + currentWeather);
             } else {
-              Serial.println(
-                  "Manual weather fetch failed (both Open-Meteo and wttr.in)");
+              Serial.println("Manual weather fetch failed (both Open-Meteo and wttr.in)");
             }
           }
 
           // 完成后执行一次全刷来更新屏幕
-          // 强制 HomeTimePage 进行刷新（避免因时间/日期未变化而提前返回）
           Serial.println("Forcing full refresh...");
           lastDisplayedTime = "";
           lastFullRefresh = 0;
           gPageMgr.requestRender(true);
           lastInteraction = now;
-          gPageMgr.cancelPendingFull(); // 避免紧随的延迟全刷
+          gPageMgr.cancelPendingFull();
         }
+
+        // reset press tracking
+        centerPressStartTime = 0;
+        longPressTriggered = false;
       }
       lastButtonState = bs;
     }

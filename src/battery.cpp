@@ -10,7 +10,7 @@ BatteryMonitor gBattery;
 
 BatteryMonitor::BatteryMonitor()
     : _adcPin(BAT_ADC_PIN), _vref(3.3f), _adcMax(4095), _dividerFactor(1.0f),
-      _cal(1.0f), _offset(0.9f), _filteredV(0.0f), _initialized(0), _winIdx(0) {
+      _cal(1.0f), _offset(0.95f), _filteredV(0.0f), _initialized(0), _winIdx(0) {
   for (int i = 0; i < WIN_SZ; ++i) {
     _winV[i] = 0.0f;
     _winT[i] = 0;

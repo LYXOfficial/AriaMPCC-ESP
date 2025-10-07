@@ -110,7 +110,7 @@ bool getLocationByIP(double &outLat, double &outLon, String &outCityEn) {
 
 String getCityByIP() {
   HTTPClient http;
-  http.begin("http://my.ip.cn/json/");
+  http.begin("http://my.ip.cn/json/?ticket=63ba12d2a3cc37ef8e584fd22b6dc0681759736583");
   int httpCode = http.GET();
   String city = "";
   if (httpCode == HTTP_CODE_OK) {
